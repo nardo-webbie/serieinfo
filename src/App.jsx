@@ -281,6 +281,14 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .lrow-watch:hover { background: #c82333; }
 .lrow-del { background: none; border: none; color: #ccc; font-size: 15px; cursor: pointer; padding: 4px 6px; border-radius: 5px; transition: all .15s; }
 .lrow-del:hover { color: #dc3545; background: #fff0f1; }
+.lrow.watched { opacity: .55; background: #fafafa; }
+.lrow.watched .lrow-title { text-decoration: line-through; color: #aaa; }
+.watched-cb { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; border: 2px solid #e5e5ea; border-radius: 5px; cursor: pointer; flex-shrink: 0; transition: all .15s; position: relative; background: #fff; }
+.watched-cb:checked { background: #28a745; border-color: #28a745; }
+.watched-cb:checked::after { content: ""; position: absolute; color: #fff; font-size: 12px; font-weight: 700; top: 50%; left: 50%; transform: translate(-50%,-50%); }
+.watched-cb:hover { border-color: #28a745; }
+.fb.watched-filter { border-color: #c3e6cb; color: #28a745; background: #f0fff4; }
+.fb.watched-filter.on { background: #28a745; border-color: #28a745; color: #fff; }
 .modal-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.35); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; padding: 16px; animation: fadeUp .18s ease; }
 .modal { background: #fff; border-radius: 14px; padding: 28px; max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto; position: relative; box-shadow: 0 8px 40px rgba(0,0,0,.14); }
 .modal-close { position: absolute; top: 14px; right: 14px; background: #f5f5f7; border: none; border-radius: 100px; color: #6e6e73; font-size: 16px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
@@ -309,10 +317,140 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .done-sub { font-size: 13px; color: #6e6e73; line-height: 1.6; }
 .errs { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
 .ei { background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #c82333; font-family: monospace; word-break: break-word; }
+.pin-overlay { position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,.45); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; padding: 16px; animation: fadeUp .15s ease; }
+.pin-modal { background: #fff; border-radius: 14px; padding: 28px 24px; max-width: 320px; width: 100%; box-shadow: 0 8px 40px rgba(0,0,0,.16); text-align: center; }
+.pin-title { font-size: 17px; font-weight: 600; color: #1a1a2e; margin-bottom: 6px; }
+.pin-sub { font-size: 13px; color: #6e6e73; margin-bottom: 20px; line-height: 1.5; }
+.pin-dots { display: flex; justify-content: center; gap: 12px; margin-bottom: 20px; }
+.pin-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #e5e5ea; transition: all .15s; }
+.pin-dot.filled { background: #dc3545; border-color: #dc3545; }
+.pin-dot.error { background: #dc3545; border-color: #dc3545; animation: shake .3s ease; }
+.pin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.pin-btn { background: #f5f5f7; border: 1.5px solid #e5e5ea; border-radius: 10px; font-size: 20px; font-weight: 600; color: #1a1a2e; padding: 14px; cursor: pointer; transition: all .1s; font-family: 'Inter', sans-serif; }
+.pin-btn:hover { background: #e5e5ea; }
+.pin-btn:active { transform: scale(.95); background: #dc3545; color: #fff; border-color: #dc3545; }
+.pin-clear { background: none; border: none; font-size: 13px; color: #aaa; cursor: pointer; margin-top: 4px; }
+.pin-clear:hover { color: #dc3545; }
+.pin-err { font-size: 12px; color: #dc3545; margin-top: 6px; min-height: 18px; }
+.pin-setup-input { background: #f5f5f7; border: 1.5px solid #e5e5ea; border-radius: 8px; color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 24px; padding: 12px; outline: none; width: 100%; text-align: center; letter-spacing: .3em; margin-bottom: 12px; transition: border-color .15s; }
+.pin-setup-input:focus { border-color: #dc3545; }
+@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
 `;
+
+
+// ─── PIN storage ──────────────────────────────────────────────────────────
+const PIN_KEY = "serieinfo-pin";
+const getPin = () => { try { return localStorage.getItem(PIN_KEY) || ""; } catch { return ""; } };
+const savePin = (p) => { try { localStorage.setItem(PIN_KEY, p); } catch {} };
+
+// ─── usePinGuard hook ─────────────────────────────────────────────────────
+// Returns { guard, PinGate } — call guard(callback) to require PIN first
+function usePinGuard() {
+  const [pending, setPending] = useState(null); // { cb }
+  const [setting, setSetting] = useState(false);
+
+  function guard(cb) {
+    const pin = getPin();
+    if (!pin) { setSetting(true); setPending({ cb }); return; }
+    setPending({ cb });
+  }
+
+  function PinGate() {
+    const pin = getPin();
+
+    // Setup: no PIN yet
+    if (setting) return (
+      <PinSetup onDone={(p) => { savePin(p); setSetting(false); if (pending) { pending.cb(); setPending(null); } }} onCancel={() => { setSetting(false); setPending(null); }} />
+    );
+
+    if (!pending) return null;
+
+    return (
+      <PinVerify pin={pin} onSuccess={() => { pending.cb(); setPending(null); }} onCancel={() => setPending(null)} />
+    );
+  }
+
+  return { guard, PinGate };
+}
+
+// ─── PIN Setup modal ──────────────────────────────────────────────────────
+function PinSetup({ onDone, onCancel }) {
+  const [step, setStep] = useState(1); // 1=enter, 2=confirm
+  const [first, setFirst] = useState("");
+  const [val, setVal] = useState("");
+  const [err, setErr] = useState("");
+
+  function submit() {
+    if (val.length < 4) { setErr("Minimaal 4 cijfers"); return; }
+    if (step === 1) { setFirst(val); setVal(""); setStep(2); setErr(""); return; }
+    if (val !== first) { setErr("Pincode komt niet overeen"); setVal(""); return; }
+    onDone(val);
+  }
+
+  const content = (
+    <div className="pin-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="pin-modal">
+        <div className="pin-title">🔒 Pincode instellen</div>
+        <div className="pin-sub">{step === 1 ? "Kies een pincode van minimaal 4 cijfers." : "Bevestig de pincode."}</div>
+        <input className="pin-setup-input" type="password" inputMode="numeric" maxLength={8}
+          placeholder="••••" value={val} autoFocus
+          onChange={e => { setVal(e.target.value.replace(/\D/g, "")); setErr(""); }}
+          onKeyDown={e => e.key === "Enter" && submit()} />
+        {err && <div className="pin-err">{err}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn-red" style={{ flex: 1 }} onClick={submit}>{step === 1 ? "Volgende →" : "Opslaan"}</button>
+          <button className="btn-ghost" onClick={onCancel}>Annuleer</button>
+        </div>
+      </div>
+    </div>
+  );
+  return createPortal(content, document.body);
+}
+
+// ─── PIN Verify modal ─────────────────────────────────────────────────────
+function PinVerify({ pin, onSuccess, onCancel }) {
+  const [input, setInput] = useState("");
+  const [err, setErr] = useState(false);
+
+  function press(d) {
+    if (input.length >= pin.length) return;
+    const next = input + d;
+    setInput(next);
+    setErr(false);
+    if (next.length === pin.length) {
+      if (next === pin) { setTimeout(onSuccess, 120); }
+      else { setTimeout(() => { setInput(""); setErr(true); }, 300); }
+    }
+  }
+
+  const dots = Array.from({ length: pin.length }, (_, i) => (
+    <div key={i} className={"pin-dot" + (input.length > i ? (err ? " error" : " filled") : "")} />
+  ));
+
+  const content = (
+    <div className="pin-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="pin-modal">
+        <div className="pin-title">🔒 Pincode vereist</div>
+        <div className="pin-sub">Voer de pincode in om door te gaan.</div>
+        <div className="pin-dots">{dots}</div>
+        <div className="pin-grid">
+          {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} className="pin-btn" onClick={() => press(String(n))}>{n}</button>)}
+          <div />
+          <button className="pin-btn" onClick={() => press("0")}>0</button>
+          <button className="pin-btn" onClick={() => setInput(i => i.slice(0,-1))}>⌫</button>
+        </div>
+        {err && <div className="pin-err">Onjuiste pincode, probeer opnieuw.</div>}
+        <button className="pin-clear" onClick={onCancel}>Annuleer</button>
+      </div>
+    </div>
+  );
+  return createPortal(content, document.body);
+}
 
 // ─── Detail Modal (via Portal — altijd zichtbaar in viewport) ─────────────
 function DetailModal({ item, onClose, onDelete }) {
+  const { guard, PinGate } = usePinGuard();
+
   // Vergrendel scrollen en scroll naar boven zodra modal opent
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -345,7 +483,7 @@ function DetailModal({ item, onClose, onDelete }) {
             {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {item.streaming_service}</a>}
             {item.imdb_url && <a href={item.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
             {item.rt_url && <a href={item.rt_url} target="_blank" rel="noopener noreferrer" className="lb sec">🍅 RT</a>}
-            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => { onDelete(item.id); onClose(); }}>🗑 Verwijder</button>
+            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => guard(() => { onDelete(item.id); onClose(); })}>🗑 Verwijder</button>
           </div>
         </div>
         <div className="modal-footer">Opgeslagen op {new Date(item.savedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}</div>
@@ -354,23 +492,30 @@ function DetailModal({ item, onClose, onDelete }) {
   );
 
   // Render buiten de DOM-boom — altijd boven alles, ongeacht scrollpositie
-  return createPortal(content, document.body);
+  return <>
+    {createPortal(content, document.body)}
+    <PinGate />
+  </>;
 }
 
 // ─── Library ───────────────────────────────────────────────────────────────
-function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
+function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onGo }) {
+  const { guard, PinGate } = usePinGuard();
   const [q, setQ] = useState("");
   const [svc, setSvc] = useState("");
   const [sort, setSort] = useState("recent");
+  const [hideWatched, setHideWatched] = useState(false);
   const [sel, setSel] = useState(null);
 
   useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
+  const watchedCount = library.filter(i => i.watched).length;
   const svcs = [...new Set(library.map(i => i.streaming_service).filter(Boolean))].sort();
   let list = library.filter(item => {
     const lq = q.toLowerCase();
     return (!lq || item.title?.toLowerCase().includes(lq) || (item.genres || []).some(g => g.toLowerCase().includes(lq)) || item.description?.toLowerCase().includes(lq))
-      && (!svc || item.streaming_service === svc);
+      && (!svc || item.streaming_service === svc)
+      && (!hideWatched || !item.watched);
   });
   if (sort === "az") list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
   if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.imdb_rating) || 0) - (parseFloat(a.imdb_rating) || 0));
@@ -381,13 +526,24 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
         <div>
           <p className="eyebrow">Jouw collectie</p>
           <h2 className="ltitle">SERIE<em style={{ color: "#dc3545", fontStyle: "normal" }}>BIBLIOTHEEK</em></h2>
-          <p className="lcount">{library.length} series{enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>· AI verrijkt {enrichingIds.size}…</span>}</p>
+          <p className="lcount">
+            {library.length} series
+            {watchedCount > 0 && <span style={{ color: "#28a745", marginLeft: 8 }}>· {watchedCount} bekeken</span>}
+            {enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>· AI verrijkt {enrichingIds.size}…</span>}
+          </p>
         </div>
         <div className="controls">
           <input className="si" placeholder="Zoek naam, genre of omschrijving…" value={q} onChange={e => setQ(e.target.value)} />
           {svcs.map(s => <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>)}
           {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "IMDb"]].map(([v, l]) =>
             <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>)}
+          <button
+            className={"fb watched-filter " + (hideWatched ? "on" : "")}
+            onClick={() => setHideWatched(h => !h)}
+            title="Bekeken series verbergen"
+          >
+            {hideWatched ? "✓ Bekeken verborgen" : "👁 Verberg bekeken"}
+          </button>
         </div>
       </div>
       <div className="lbody">
@@ -402,14 +558,25 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
             </div>
           </div>
         ) : list.length === 0 ? (
-          <div className="empty"><div className="empty-ico">🔍</div><h3>Geen resultaten</h3></div>
+          <div className="empty"><div className="empty-ico">🔍</div><h3>Geen resultaten</h3>
+            {hideWatched && <p style={{ marginTop: 8 }}>Alle series zijn gemarkeerd als bekeken.<br /><button className="btn-ghost" style={{ marginTop: 12, fontSize: 13 }} onClick={() => setHideWatched(false)}>Toon bekeken series</button></p>}
+          </div>
         ) : (
           <div className="lib-list">
             {list.map(item => {
               const isEnriching = enrichingIds.has(item.id);
               return (
-                <div key={item.id} className="lrow" onClick={() => setSel(item)}>
+                <div key={item.id} className={"lrow " + (item.watched ? "watched" : "")} onClick={() => setSel(item)}>
                   <div className="lrow-accent" style={{ background: svcColor(item.streaming_service) }} />
+                  {/* Checkbox bekeken */}
+                  <input
+                    type="checkbox"
+                    className="watched-cb"
+                    checked={!!item.watched}
+                    title={item.watched ? "Markeer als onbekeken" : "Markeer als bekeken"}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => { e.stopPropagation(); guard(() => onToggleWatched(item.id)); }}
+                  />
                   <div className="lrow-main">
                     <div className="lrow-top">
                       <div className="lrow-title">{item.title}</div>
@@ -425,7 +592,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
                   <div className="lrow-right">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div className="lrow-svc">{item.streaming_service}</div>
-                      <button className="lrow-del" onClick={e => { e.stopPropagation(); onDelete(item.id); }}>✕</button>
+                      <button className="lrow-del" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>✕</button>
                     </div>
                     <div className="lrow-btns">
                       {!isEnriching && <>{item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}{item.rt_rating && <span className="lrow-r rt">🍅 {item.rt_rating}</span>}</>}
@@ -439,12 +606,14 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
         )}
       </div>
       {sel && <DetailModal item={sel} onClose={() => setSel(null)} onDelete={id => { onDelete(id); setSel(null); }} />}
+      <PinGate />
     </div>
   );
 }
 
 // ─── Search ────────────────────────────────────────────────────────────────
 function SearchPage({ library, onSave }) {
+  const { guard, PinGate } = usePinGuard();
   const [series, setSeries] = useState("");
   const [streaming, setStreaming] = useState("");
   const [loading, setLoading] = useState(false);
@@ -520,7 +689,7 @@ function SearchPage({ library, onSave }) {
               {result.imdb_url && <a href={result.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
               {result.rt_url && <a href={result.rt_url} target="_blank" rel="noopener noreferrer" className="lb sec">🍅 RT</a>}
               <button className={"lb " + (saved || alreadySaved ? "saved" : "save")}
-                onClick={() => { if (alreadySaved) return; onSave({ ...result, id: "s" + Date.now(), savedAt: new Date().toISOString() }); setSaved(true); }}
+                onClick={() => { if (alreadySaved) return; guard(() => { onSave({ ...result, id: "s" + Date.now(), savedAt: new Date().toISOString() }); setSaved(true); }); }}
                 disabled={saved || alreadySaved}>
                 {saved || alreadySaved ? "✓ Opgeslagen" : "+ Opslaan in bibliotheek"}
               </button>
@@ -529,6 +698,7 @@ function SearchPage({ library, onSave }) {
           </div>
         </div>
       )}
+      <PinGate />
     </div>
   );
 }
@@ -622,6 +792,7 @@ export default function App() {
   }
   function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
   function deleteItem(id) { const u = library.filter(i => i.id !== id); setLibrary(u); saveLib(u); }
+  function toggleWatched(id) { const u = library.map(i => i.id === id ? { ...i, watched: !i.watched } : i); setLibrary(u); saveLib(u); }
 
   return (
     <>
@@ -638,7 +809,7 @@ export default function App() {
           </div>
         </nav>
         {page === "search" && <SearchPage library={library} onSave={addItem} />}
-        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onGo={setPage} />}
+        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onGo={setPage} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} />}
       </div>
     </>
