@@ -627,16 +627,8 @@ function SearchPage({ library, onSave }) {
     if (!series.trim()) return;
     setLoading(true); setError(""); setResult(null); setSaved(false); setStatus("AI zoekt op…");
     try {
-      const data = await callClaude({
-        model: "claude-sonnet-4-20250514", max_tokens: 900,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{ role: "user", content:
-          'Return ONLY raw JSON for TV series "' + series.trim() + '" on "' + (streaming.trim() || "unknown") + '":\n' +
-          '{"title":"str","year":"str or null","genres":["str"],"description":"2-3 sentences Dutch",' +
-          '"imdb_rating":"X.X/10 or null","imdb_url":"url or null","rt_rating":"XX% or null",' +
-          '"rt_url":"url or null","streaming_service":"str","streaming_url":"url or null"}'
-        }],
-      });
+              tools: [{ type: "web_search_20250305", name: "web_search" }],
+      };
       let raw = "";
       for (const b of data.content || []) if (b.type === "text") raw += b.text;
       const s2 = raw.indexOf("{"), e2 = raw.lastIndexOf("}");
