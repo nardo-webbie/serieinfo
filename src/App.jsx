@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 
 // ─── API via Vercel proxy (geen directe Anthropic calls) ──────────────────
 async function claude(messages, maxTokens = 1000) {
@@ -6,7 +7,7 @@ async function claude(messages, maxTokens = 1000) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: maxTokens,
       messages,
     }),
@@ -310,9 +311,16 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .ei { background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #c82333; font-family: monospace; word-break: break-word; }
 `;
 
-// ─── Detail Modal ──────────────────────────────────────────────────────────
+// ─── Detail Modal (via Portal — altijd zichtbaar in viewport) ─────────────
 function DetailModal({ item, onClose, onDelete }) {
-  return (
+  // Vergrendel scrollen en scroll naar boven zodra modal opent
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  const content = (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <button className="modal-close" onClick={onClose}>✕</button>
@@ -344,6 +352,9 @@ function DetailModal({ item, onClose, onDelete }) {
       </div>
     </div>
   );
+
+  // Render buiten de DOM-boom — altijd boven alles, ongeacht scrollpositie
+  return createPortal(content, document.body);
 }
 
 // ─── Library ───────────────────────────────────────────────────────────────
