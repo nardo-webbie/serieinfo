@@ -1,24 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 
-// ─── API key (localStorage only) ─────────────────────────────────────────
-const API_KEY_LS = "serieinfo-apikey";
-const getKey = () => { try { return localStorage.getItem(API_KEY_LS) || ""; } catch { return ""; } };
-const setKey = (k) => { try { localStorage.setItem(API_KEY_LS, k); } catch {} };
-const delKey = () => { try { localStorage.removeItem(API_KEY_LS); } catch {} };
-
-// ─── Anthropic API (direct browser, no web_search tool) ──────────────────
+// ─── API via Vercel proxy (geen directe Anthropic calls) ──────────────────
 async function claude(messages, maxTokens = 1000) {
-  const key = getKey();
-  if (!key) throw new Error("Geen API-key");
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/claude", {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: maxTokens,
@@ -26,24 +12,26 @@ async function claude(messages, maxTokens = 1000) {
     }),
   });
 
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error?.message || "HTTP " + res.status);
-  }
   const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
+  if (!res.ok) throw new Error(data?.error?.message || data?.error || "API fout " + res.status);
+  if (data.error) throw new Error(data.error.message || data.error);
 
   let text = "";
   for (const b of data.content || []) if (b.type === "text") text += b.text;
   return text;
 }
 
-// ─── Library (localStorage only) ─────────────────────────────────────────
+// ─── Library (localStorage) ───────────────────────────────────────────────
 const LIB_KEY = "serieinfo-lib";
-const loadLib = () => { try { const v = localStorage.getItem(LIB_KEY); return v ? JSON.parse(v) : []; } catch { return []; } };
-const saveLib = (items) => { try { localStorage.setItem(LIB_KEY, JSON.stringify(items)); } catch {} };
+const loadLib = () => {
+  try { const v = localStorage.getItem(LIB_KEY); return v ? JSON.parse(v) : []; }
+  catch { return []; }
+};
+const saveLib = (items) => {
+  try { localStorage.setItem(LIB_KEY, JSON.stringify(items)); } catch {}
+};
 
-// ─── Service colours ──────────────────────────────────────────────────────
+// ─── Service kleuren ──────────────────────────────────────────────────────
 const SVC_COLORS = {
   netflix: "#e50914", "apple tv": "#1c1c1e", max: "#002be0", hbo: "#002be0",
   "prime video": "#00a8e1", amazon: "#00a8e1", disney: "#113ccf",
@@ -55,7 +43,18 @@ const svcColor = (s = "") => {
   return "#888";
 };
 
-// ─── Import list ──────────────────────────────────────────────────────────
+function parseJsonArray(text) {
+  const s = text.indexOf("["), e = text.lastIndexOf("]");
+  if (s === -1 || e === -1) throw new Error("Geen JSON array gevonden");
+  return JSON.parse(text.slice(s, e + 1));
+}
+function parseJsonObject(text) {
+  const s = text.indexOf("{"), e = text.lastIndexOf("}");
+  if (s === -1 || e === -1) throw new Error("Geen JSON object gevonden");
+  return JSON.parse(text.slice(s, e + 1));
+}
+
+// ─── Import lijst ─────────────────────────────────────────────────────────
 const IMPORT_LIST = [
   ["Unfamiliar","Netflix","https://www.netflix.com"],
   ["The Friend and Neighbors","Apple TV+","https://tv.apple.com"],
@@ -148,18 +147,6 @@ function chunk(arr, n) {
 }
 const BATCHES = chunk(IMPORT_LIST, 8);
 
-function parseJsonArray(text) {
-  const s = text.indexOf("["), e = text.lastIndexOf("]");
-  if (s === -1 || e === -1) throw new Error("Geen JSON array gevonden");
-  return JSON.parse(text.slice(s, e + 1));
-}
-
-function parseJsonObject(text) {
-  const s = text.indexOf("{"), e = text.lastIndexOf("}");
-  if (s === -1 || e === -1) throw new Error("Geen JSON object gevonden");
-  return JSON.parse(text.slice(s, e + 1));
-}
-
 // ─── CSS ──────────────────────────────────────────────────────────────────
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Bebas+Neue&display=swap');
@@ -168,26 +155,21 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-
 .spin {
   display: inline-block; width: 14px; height: 14px;
   border: 2px solid rgba(220,53,69,.2); border-top-color: #dc3545;
   border-radius: 50%; animation: spin .7s linear infinite;
   vertical-align: middle; margin-right: 7px;
 }
-
-/* NAV */
 .nav {
   position: sticky; top: 0; z-index: 99;
   background: rgba(255,255,255,.96); backdrop-filter: blur(12px);
   border-bottom: 1px solid #e5e5ea;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 24px; height: 56px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  padding: 0 24px; height: 56px; box-shadow: 0 1px 4px rgba(0,0,0,.06);
 }
 .logo { font-family: 'Bebas Neue', sans-serif; font-size: 24px; letter-spacing: .07em; color: #1a1a2e; cursor: pointer; }
 .logo em { color: #dc3545; font-style: normal; }
-.nav-right { display: flex; align-items: center; gap: 8px; }
 .tabs { display: flex; gap: 3px; }
 .tab {
   background: none; border: none; cursor: pointer;
@@ -197,18 +179,7 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 }
 .tab:hover { color: #1a1a2e; background: #f0f0f5; }
 .tab.on { color: #dc3545; background: #fff0f1; font-weight: 600; }
-.badge {
-  background: #dc3545; color: #fff; border-radius: 100px;
-  font-size: 10px; font-weight: 700; padding: 2px 7px;
-}
-.key-btn {
-  background: #f0fff4; border: 1px solid #c3e6cb; border-radius: 8px;
-  color: #28a745; font-size: 12px; font-weight: 500; padding: 6px 12px;
-  cursor: pointer; transition: all .15s;
-}
-.key-btn:hover { background: #e0f5e9; }
-
-/* BUTTONS */
+.badge { background: #dc3545; color: #fff; border-radius: 100px; font-size: 10px; font-weight: 700; padding: 2px 7px; }
 .btn-red {
   background: #dc3545; border: none; border-radius: 8px; color: #fff; cursor: pointer;
   font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 600;
@@ -224,170 +195,62 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
   transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
 }
 .btn-ghost:hover { background: #f5f5f7; color: #1a1a2e; }
-
-/* ONBOARDING */
-.onboard {
-  min-height: 100vh; display: flex; align-items: center;
-  justify-content: center; padding: 24px; background: #f5f5f7;
-}
-.ob-card {
-  background: #fff; border: 1px solid #e5e5ea; border-radius: 16px;
-  padding: 40px 36px; max-width: 480px; width: 100%; text-align: center;
-  box-shadow: 0 4px 24px rgba(0,0,0,.08);
-}
-.ob-icon { font-size: 52px; margin-bottom: 16px; }
-.ob-title { font-family: 'Bebas Neue', sans-serif; font-size: 36px; color: #1a1a2e; margin-bottom: 8px; }
-.ob-title em { color: #dc3545; font-style: normal; }
-.ob-sub { font-size: 14px; color: #6e6e73; line-height: 1.7; margin-bottom: 24px; }
-.ob-sub a { color: #dc3545; text-decoration: none; }
-.ob-sub a:hover { text-decoration: underline; }
-.ob-steps { text-align: left; margin-bottom: 24px; display: flex; flex-direction: column; gap: 12px; }
-.step { display: flex; gap: 12px; align-items: flex-start; }
-.step-n {
-  background: #fff0f1; border: 1px solid #f5a0a8; color: #dc3545;
-  font-weight: 700; font-size: 12px; border-radius: 100px;
-  width: 24px; height: 24px; display: flex; align-items: center;
-  justify-content: center; flex-shrink: 0; margin-top: 2px;
-}
-.step-text { font-size: 13px; color: #6e6e73; line-height: 1.6; }
-.step-text strong { color: #1a1a2e; }
-.step-text a { color: #dc3545; text-decoration: none; }
-.flabel { font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #6e6e73; font-weight: 600; display: block; margin-bottom: 6px; }
-.finput {
-  background: #f5f5f7; border: 1.5px solid #e5e5ea; border-radius: 8px;
-  color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 14px;
-  padding: 11px 14px; outline: none; width: 100%; transition: border-color .15s;
-}
-.finput:focus { border-color: #dc3545; background: #fff; }
-.finput::placeholder { color: #bbb; }
-.key-note { font-size: 11px; color: #aaa; line-height: 1.6; margin-top: 6px; text-align: left; }
-.ob-err { font-size: 12px; color: #c82333; margin-top: 6px; text-align: left; }
-
-/* KEY MODAL */
-.mo-overlay {
-  position: fixed; inset: 0; z-index: 300;
-  background: rgba(0,0,0,.3); backdrop-filter: blur(8px);
-  display: flex; align-items: center; justify-content: center; padding: 16px;
-}
-.km {
-  background: #fff; border-radius: 14px; padding: 28px;
-  max-width: 420px; width: 100%; position: relative;
-  box-shadow: 0 8px 32px rgba(0,0,0,.14);
-}
-.km-close {
-  position: absolute; top: 12px; right: 12px;
-  background: #f5f5f7; border: none; border-radius: 100px;
-  color: #6e6e73; font-size: 16px; width: 30px; height: 30px;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-}
-.km-title { font-size: 18px; font-weight: 600; color: #1a1a2e; margin-bottom: 16px; }
-.km-current {
-  background: #f0fff4; border: 1px solid #c3e6cb; border-radius: 8px;
-  padding: 10px 13px; font-size: 12px; color: #28a745;
-  margin-bottom: 14px; font-family: monospace; word-break: break-all;
-}
-
-/* PAGES */
 .page { animation: fadeUp .25s ease both; padding-bottom: 60px; }
 .eyebrow { font-size: 11px; letter-spacing: .25em; text-transform: uppercase; color: #dc3545; margin-bottom: 10px; font-weight: 600; }
 .big-title { font-family: 'Bebas Neue', sans-serif; font-size: clamp(40px, 7vw, 76px); line-height: .92; color: #1a1a2e; margin-bottom: 8px; }
 .big-title em { color: #dc3545; font-style: normal; }
-
-/* SEARCH */
-.s-hero {
-  padding: 52px 24px 36px; text-align: center;
-  border-bottom: 1px solid #e5e5ea; background: #fff;
-}
+.s-hero { padding: 52px 24px 36px; text-align: center; border-bottom: 1px solid #e5e5ea; background: #fff; }
 .s-sub { font-size: 15px; color: #6e6e73; max-width: 380px; margin: 0 auto; line-height: 1.65; }
 .s-form { max-width: 560px; margin: 32px auto 0; padding: 0 20px; display: grid; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 5px; }
+.flabel { font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #6e6e73; font-weight: 600; }
+.finput {
+  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px;
+  color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 15px;
+  padding: 11px 14px; outline: none; width: 100%; transition: border-color .15s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+.finput:focus { border-color: #dc3545; }
+.finput::placeholder { color: #bbb; }
 .status-bar {
   background: #fff8f8; border: 1px solid #f5a0a8; border-radius: 8px;
   color: #dc3545; font-size: 13px; padding: 10px 14px; text-align: center;
   font-style: italic; animation: pulse 1.5s ease-in-out infinite; margin-top: 10px;
 }
-.err-bar {
-  background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 8px;
-  color: #c82333; font-size: 13px; padding: 10px 14px; text-align: center; margin-top: 10px;
-}
-
-/* RESULT */
+.err-bar { background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 8px; color: #c82333; font-size: 13px; padding: 10px 14px; text-align: center; margin-top: 10px; }
 .result { max-width: 720px; margin: 28px auto 0; padding: 0 20px; animation: fadeUp .28s ease both; }
-.rcard {
-  background: #fff; border: 1px solid #e5e5ea; border-radius: 12px;
-  padding: 24px 28px; display: flex; flex-direction: column; gap: 14px;
-  box-shadow: 0 2px 8px rgba(0,0,0,.06);
-}
+.rcard { background: #fff; border: 1px solid #e5e5ea; border-radius: 12px; padding: 24px 28px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
 .rheader { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
 .rtitle { font-family: 'Bebas Neue', sans-serif; font-size: clamp(24px, 4vw, 38px); line-height: 1; letter-spacing: .03em; color: #1a1a2e; }
-.svc-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  border-radius: 100px; padding: 4px 12px 4px 8px;
-  border: 1px solid #e5e5ea; background: #fff; flex-shrink: 0;
-}
+.svc-chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 100px; padding: 4px 12px 4px 8px; border: 1px solid #e5e5ea; background: #fff; flex-shrink: 0; }
 .svc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .svc-name { font-size: 12px; color: #6e6e73; font-weight: 500; }
 .rmeta { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-.tag {
-  background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 4px;
-  color: #dc3545; font-size: 10px; font-weight: 600; letter-spacing: .1em;
-  padding: 3px 8px; text-transform: uppercase;
-}
-.ytag {
-  background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 4px;
-  color: #6e6e73; font-size: 10px; font-weight: 600; letter-spacing: .1em;
-  padding: 3px 8px; text-transform: uppercase;
-}
-.rdesc {
-  font-size: 14px; line-height: 1.75; color: #444;
-  border-left: 3px solid #dc3545;
-  padding: 10px 14px; background: #fff8f8; border-radius: 0 6px 6px 0;
-}
+.tag { background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 4px; color: #dc3545; font-size: 10px; font-weight: 600; letter-spacing: .1em; padding: 3px 8px; text-transform: uppercase; }
+.ytag { background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 4px; color: #6e6e73; font-size: 10px; font-weight: 600; letter-spacing: .1em; padding: 3px 8px; text-transform: uppercase; }
+.rdesc { font-size: 14px; line-height: 1.75; color: #444; border-left: 3px solid #dc3545; padding: 10px 14px; background: #fff8f8; border-radius: 0 6px 6px 0; }
 .rratings { display: flex; gap: 10px; flex-wrap: wrap; }
-.rbox {
-  background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 8px;
-  padding: 12px 16px; display: flex; align-items: center; gap: 10px;
-  flex: 1; min-width: 120px;
-}
+.rbox { background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 8px; padding: 12px 16px; display: flex; align-items: center; gap: 10px; flex: 1; min-width: 120px; }
 .ricon { font-size: 22px; line-height: 1; }
 .rl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #aaa; margin-bottom: 2px; font-weight: 600; }
 .rv { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: .04em; line-height: 1; }
 .rv.imdb { color: #f5a623; } .rv.rt { color: #fa320a; } .rv.none { color: #ccc; font-size: 15px; }
 .rlinks { display: flex; gap: 8px; flex-wrap: wrap; }
-.lb {
-  display: inline-flex; align-items: center; gap: 5px; border-radius: 7px;
-  font-size: 13px; font-weight: 500; padding: 8px 14px;
-  text-decoration: none; transition: all .15s; cursor: pointer; border: none;
-}
+.lb { display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; font-size: 13px; font-weight: 500; padding: 8px 14px; text-decoration: none; transition: all .15s; cursor: pointer; border: none; }
 .lb:hover { opacity: .85; }
 .lb.primary { background: #dc3545; color: #fff; }
 .lb.sec { background: #fff; border: 1.5px solid #e5e5ea; color: #444; }
 .lb.save { background: #fff; border: 1.5px solid #e5e5ea; color: #6e6e73; }
 .lb.saved { background: #f0fff4; border-color: #c3e6cb; color: #28a745; }
-.rfooter { font-size: 11px; color: #bbb; letter-spacing: .04em; padding-top: 2px; }
-
-/* LIBRARY */
-.lhdr {
-  padding: 36px 24px 22px; border-bottom: 1px solid #e5e5ea; background: #fff;
-  display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap;
-}
+.rfooter { font-size: 11px; color: #bbb; padding-top: 2px; }
+.lhdr { padding: 36px 24px 22px; border-bottom: 1px solid #e5e5ea; background: #fff; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .ltitle { font-family: 'Bebas Neue', sans-serif; font-size: clamp(28px, 4vw, 46px); line-height: .92; color: #1a1a2e; }
 .lcount { color: #aaa; font-size: 12px; margin-top: 4px; }
 .controls { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-.si {
-  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px;
-  color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 13px;
-  padding: 8px 13px; outline: none; width: 195px;
-}
+.si { background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px; color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 13px; padding: 8px 13px; outline: none; width: 195px; }
 .si:focus { border-color: #dc3545; }
 .si::placeholder { color: #bbb; }
-.fb {
-  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px;
-  color: #6e6e73; font-family: 'Inter', sans-serif; font-size: 12px;
-  font-weight: 500; padding: 7px 12px; cursor: pointer; transition: all .15s; white-space: nowrap;
-}
+.fb { background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px; color: #6e6e73; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 500; padding: 7px 12px; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .fb:hover { background: #f5f5f7; color: #1a1a2e; }
 .fb.on { background: #fff0f1; border-color: #f5a0a8; color: #dc3545; }
 .lbody { padding: 20px 24px 0; }
@@ -396,11 +259,7 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .empty h3 { font-size: 20px; font-weight: 600; color: #aaa; margin-bottom: 6px; }
 .empty p { font-size: 14px; color: #bbb; line-height: 1.6; }
 .lib-list { display: flex; flex-direction: column; gap: 8px; }
-.lrow {
-  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 10px;
-  padding: 16px 18px; display: flex; gap: 14px; cursor: pointer;
-  transition: box-shadow .15s, border-color .15s;
-}
+.lrow { background: #fff; border: 1.5px solid #e5e5ea; border-radius: 10px; padding: 16px 18px; display: flex; gap: 14px; cursor: pointer; transition: box-shadow .15s, border-color .15s; }
 .lrow:hover { border-color: #f5a0a8; box-shadow: 0 3px 12px rgba(220,53,69,.08); }
 .lrow-accent { width: 4px; border-radius: 3px; align-self: stretch; flex-shrink: 0; min-height: 40px; }
 .lrow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
@@ -417,43 +276,18 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .lrow-r { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 3px; white-space: nowrap; }
 .lrow-r.imdb { color: #f5a623; } .lrow-r.rt { color: #fa320a; }
 .lrow-btns { display: flex; align-items: center; gap: 7px; }
-.lrow-watch {
-  background: #dc3545; border-radius: 6px; color: #fff;
-  font-size: 12px; font-weight: 600; padding: 6px 12px;
-  text-decoration: none; transition: background .15s; white-space: nowrap;
-}
+.lrow-watch { background: #dc3545; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 600; padding: 6px 12px; text-decoration: none; transition: background .15s; white-space: nowrap; }
 .lrow-watch:hover { background: #c82333; }
-.lrow-del {
-  background: none; border: none; color: #ccc; font-size: 15px;
-  cursor: pointer; padding: 4px 6px; border-radius: 5px; transition: all .15s;
-}
+.lrow-del { background: none; border: none; color: #ccc; font-size: 15px; cursor: pointer; padding: 4px 6px; border-radius: 5px; transition: all .15s; }
 .lrow-del:hover { color: #dc3545; background: #fff0f1; }
-
-/* DETAIL MODAL */
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 200;
-  background: rgba(0,0,0,.35); backdrop-filter: blur(8px);
-  display: flex; align-items: center; justify-content: center; padding: 16px;
-  animation: fadeUp .18s ease;
-}
-.modal {
-  background: #fff; border-radius: 14px; padding: 28px;
-  max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto;
-  position: relative; box-shadow: 0 8px 40px rgba(0,0,0,.14);
-}
-.modal-close {
-  position: absolute; top: 14px; right: 14px;
-  background: #f5f5f7; border: none; border-radius: 100px;
-  color: #6e6e73; font-size: 16px; width: 30px; height: 30px;
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-}
+.modal-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.35); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; padding: 16px; animation: fadeUp .18s ease; }
+.modal { background: #fff; border-radius: 14px; padding: 28px; max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto; position: relative; box-shadow: 0 8px 40px rgba(0,0,0,.14); }
+.modal-close { position: absolute; top: 14px; right: 14px; background: #f5f5f7; border: none; border-radius: 100px; color: #6e6e73; font-size: 16px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .modal-close:hover { background: #e5e5ea; }
 .modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding-right: 36px; }
 .modal-title { font-family: 'Bebas Neue', sans-serif; font-size: clamp(24px, 4vw, 34px); letter-spacing: .03em; color: #1a1a2e; line-height: 1.05; }
 .modal-body { display: flex; flex-direction: column; gap: 14px; }
 .modal-footer { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e5e5ea; font-size: 11px; color: #bbb; }
-
-/* IMPORT */
 .ip { padding: 36px 20px 60px; max-width: 860px; margin: 0 auto; }
 .imp-card { background: #fff; border: 1.5px solid #e5e5ea; border-radius: 10px; padding: 20px 24px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
 .prog-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
@@ -476,102 +310,7 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .ei { background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #c82333; font-family: monospace; word-break: break-word; }
 `;
 
-// ─── Onboarding ────────────────────────────────────────────────────────────
-function Onboarding({ onDone }) {
-  const [val, setVal] = useState("");
-  const [err, setErr] = useState("");
-
-  function submit() {
-    const t = val.trim();
-    if (!t.startsWith("sk-ant-")) { setErr("Sleutel moet beginnen met sk-ant-"); return; }
-    setKey(t);
-    onDone(t);
-  }
-
-  return (
-    <>
-      <style>{CSS}</style>
-      <div className="onboard">
-        <div className="ob-card">
-          <div className="ob-icon">🎬</div>
-          <div className="ob-title">SERIE<em>INFO</em></div>
-          <p className="ob-sub">
-            Je hebt een <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">Anthropic API-sleutel</a> nodig.
-            Die wordt eenmalig opgeslagen in jouw browser.
-          </p>
-          <div className="ob-steps">
-            <div className="step">
-              <div className="step-n">1</div>
-              <div className="step-text">Ga naar <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">console.anthropic.com</a> en maak een gratis account.</div>
-            </div>
-            <div className="step">
-              <div className="step-n">2</div>
-              <div className="step-text">Klik op <strong>API Keys → Create Key</strong> en kopieer de sleutel.</div>
-            </div>
-            <div className="step">
-              <div className="step-n">3</div>
-              <div className="step-text">Plak hieronder. Kosten: <strong>~€0,01 per zoekopdracht</strong>.</div>
-            </div>
-          </div>
-          <div>
-            <label className="flabel">Jouw API-sleutel</label>
-            <input
-              className="finput"
-              type="password"
-              placeholder="sk-ant-api03-..."
-              value={val}
-              onChange={e => { setVal(e.target.value); setErr(""); }}
-              onKeyDown={e => e.key === "Enter" && submit()}
-              autoFocus
-            />
-            {err && <div className="ob-err">⚠️ {err}</div>}
-            <div className="key-note">Wordt alleen opgeslagen in jouw browser (localStorage). Nooit verstuurd naar een server.</div>
-          </div>
-          <button className="btn-red" onClick={submit} style={{ width: "100%", marginTop: 16 }}>
-            STARTEN →
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ─── Key modal ─────────────────────────────────────────────────────────────
-function KeyModal({ current, onSave, onClose }) {
-  const [val, setVal] = useState("");
-
-  function submit() {
-    const t = val.trim();
-    if (!t.startsWith("sk-ant-")) { alert("Sleutel moet beginnen met sk-ant-"); return; }
-    setKey(t); onSave(t); onClose();
-  }
-
-  return (
-    <div className="mo-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="km">
-        <button className="km-close" onClick={onClose}>✕</button>
-        <div className="km-title">🔑 API-sleutel wijzigen</div>
-        {current && <div className="km-current">Actief: {current.slice(0, 24)}…</div>}
-        <div>
-          <label className="flabel">Nieuwe sleutel</label>
-          <input className="finput" type="password" placeholder="sk-ant-api03-..."
-            value={val} onChange={e => setVal(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && submit()} autoFocus />
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button className="btn-red" style={{ fontSize: 14 }} onClick={submit}>Opslaan</button>
-          {current && (
-            <button className="btn-ghost" onClick={() => { delKey(); onSave(""); onClose(); }}>
-              Verwijder
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Detail modal ──────────────────────────────────────────────────────────
+// ─── Detail Modal ──────────────────────────────────────────────────────────
 function DetailModal({ item, onClose, onDelete }) {
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -591,56 +330,37 @@ function DetailModal({ item, onClose, onDelete }) {
           </div>
           {item.description && <p className="rdesc">{item.description}</p>}
           <div className="rratings">
-            <div className="rbox">
-              <span className="ricon">⭐</span>
-              <div><div className="rl">IMDb</div><div className={"rv " + (item.imdb_rating ? "imdb" : "none")}>{item.imdb_rating || "N/B"}</div></div>
-            </div>
-            <div className="rbox">
-              <span className="ricon">🍅</span>
-              <div><div className="rl">Rotten Tomatoes</div><div className={"rv " + (item.rt_rating ? "rt" : "none")}>{item.rt_rating || "N/B"}</div></div>
-            </div>
+            <div className="rbox"><span className="ricon">⭐</span><div><div className="rl">IMDb</div><div className={"rv " + (item.imdb_rating ? "imdb" : "none")}>{item.imdb_rating || "N/B"}</div></div></div>
+            <div className="rbox"><span className="ricon">🍅</span><div><div className="rl">Rotten Tomatoes</div><div className={"rv " + (item.rt_rating ? "rt" : "none")}>{item.rt_rating || "N/B"}</div></div></div>
           </div>
           <div className="rlinks">
             {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {item.streaming_service}</a>}
             {item.imdb_url && <a href={item.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
             {item.rt_url && <a href={item.rt_url} target="_blank" rel="noopener noreferrer" className="lb sec">🍅 RT</a>}
-            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }}
-              onClick={() => { onDelete(item.id); onClose(); }}>
-              🗑 Verwijder
-            </button>
+            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => { onDelete(item.id); onClose(); }}>🗑 Verwijder</button>
           </div>
         </div>
-        <div className="modal-footer">
-          Opgeslagen op {new Date(item.savedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}
-        </div>
+        <div className="modal-footer">Opgeslagen op {new Date(item.savedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}</div>
       </div>
     </div>
   );
 }
 
-// ─── Library page ──────────────────────────────────────────────────────────
+// ─── Library ───────────────────────────────────────────────────────────────
 function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
   const [q, setQ] = useState("");
   const [svc, setSvc] = useState("");
   const [sort, setSort] = useState("recent");
   const [sel, setSel] = useState(null);
 
-  useEffect(() => {
-    if (sel) setSel(library.find(i => i.id === sel.id) || null);
-  }, [library]);
+  useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
   const svcs = [...new Set(library.map(i => i.streaming_service).filter(Boolean))].sort();
-
   let list = library.filter(item => {
     const lq = q.toLowerCase();
-    return (
-      (!lq || item.title?.toLowerCase().includes(lq) ||
-        (item.genres || []).some(g => g.toLowerCase().includes(lq)) ||
-        item.description?.toLowerCase().includes(lq))
-      && (!svc || item.streaming_service === svc)
-    );
+    return (!lq || item.title?.toLowerCase().includes(lq) || (item.genres || []).some(g => g.toLowerCase().includes(lq)) || item.description?.toLowerCase().includes(lq))
+      && (!svc || item.streaming_service === svc);
   });
-
   if (sort === "az") list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
   if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.imdb_rating) || 0) - (parseFloat(a.imdb_rating) || 0));
 
@@ -650,19 +370,13 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
         <div>
           <p className="eyebrow">Jouw collectie</p>
           <h2 className="ltitle">SERIE<em style={{ color: "#dc3545", fontStyle: "normal" }}>BIBLIOTHEEK</em></h2>
-          <p className="lcount">
-            {library.length} series
-            {enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>· AI verrijkt {enrichingIds.size}…</span>}
-          </p>
+          <p className="lcount">{library.length} series{enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>· AI verrijkt {enrichingIds.size}…</span>}</p>
         </div>
         <div className="controls">
           <input className="si" placeholder="Zoek naam, genre of omschrijving…" value={q} onChange={e => setQ(e.target.value)} />
-          {svcs.map(s => (
-            <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>
-          ))}
-          {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "IMDb"]].map(([v, l]) => (
-            <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>
-          ))}
+          {svcs.map(s => <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>)}
+          {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "IMDb"]].map(([v, l]) =>
+            <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>)}
         </div>
       </div>
       <div className="lbody">
@@ -693,11 +407,9 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
                         {(item.genres || []).slice(0, 2).map(g => <span key={g} className="lrow-genre">{g}</span>)}
                       </div>
                     </div>
-                    {isEnriching
-                      ? <div className="lrow-enr">⏳ AI verrijkt…</div>
-                      : item.description
-                        ? <div className="lrow-desc">{item.description}</div>
-                        : null}
+                    {isEnriching ? <div className="lrow-enr">⏳ AI verrijkt…</div>
+                      : item.description ? <div className="lrow-desc">{item.description}</div>
+                      : null}
                   </div>
                   <div className="lrow-right">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -705,14 +417,8 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
                       <button className="lrow-del" onClick={e => { e.stopPropagation(); onDelete(item.id); }}>✕</button>
                     </div>
                     <div className="lrow-btns">
-                      {!isEnriching && <>
-                        {item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}
-                        {item.rt_rating && <span className="lrow-r rt">🍅 {item.rt_rating}</span>}
-                      </>}
-                      {item.streaming_url && (
-                        <a href={item.streaming_url} target="_blank" rel="noopener noreferrer"
-                          className="lrow-watch" onClick={e => e.stopPropagation()}>▶ Bekijk</a>
-                      )}
+                      {!isEnriching && <>{item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}{item.rt_rating && <span className="lrow-r rt">🍅 {item.rt_rating}</span>}</>}
+                      {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>▶ Bekijk</a>}
                     </div>
                   </div>
                 </div>
@@ -726,7 +432,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
   );
 }
 
-// ─── Search page ───────────────────────────────────────────────────────────
+// ─── Search ────────────────────────────────────────────────────────────────
 function SearchPage({ library, onSave }) {
   const [series, setSeries] = useState("");
   const [streaming, setStreaming] = useState("");
@@ -736,33 +442,24 @@ function SearchPage({ library, onSave }) {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
 
-  const alreadySaved = result
-    ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase())
-    : false;
+  const alreadySaved = result ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase()) : false;
 
   async function doSearch() {
     if (!series.trim()) return;
-    setLoading(true); setError(""); setResult(null); setSaved(false);
-    setStatus("AI zoekt op…");
+    setLoading(true); setError(""); setResult(null); setSaved(false); setStatus("AI zoekt op…");
     try {
       const prompt =
         'Geef informatie over de TV serie "' + series.trim() + '" op streamingdienst "' + (streaming.trim() || "onbekend") + '".\n\n' +
-        'Geef ALLEEN een raw JSON object terug (geen markdown, geen uitleg):\n' +
+        'Geef ALLEEN een raw JSON object terug:\n' +
         '{"title":"string","year":"string of null","genres":["string"],' +
-        '"description":"2-3 zinnen in het Nederlands",' +
-        '"imdb_rating":"X.X/10 of null","imdb_url":"url of null",' +
-        '"rt_rating":"XX% of null","rt_url":"url of null",' +
+        '"description":"2-3 zinnen Nederlands","imdb_rating":"X.X/10 of null",' +
+        '"imdb_url":"url of null","rt_rating":"XX% of null","rt_url":"url of null",' +
         '"streaming_service":"string","streaming_url":"url of null"}';
-
       const text = await claude([{ role: "user", content: prompt }], 900);
       setResult(parseJsonObject(text));
       setStatus("");
-    } catch (e) {
-      setError(e.message || "Probeer opnieuw.");
-      setStatus("");
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(e.message || "Probeer opnieuw."); setStatus(""); }
+    finally { setLoading(false); }
   }
 
   return (
@@ -775,15 +472,13 @@ function SearchPage({ library, onSave }) {
       <div className="s-form">
         <div className="field">
           <label className="flabel">TV Serie</label>
-          <input className="finput" placeholder="bv. Breaking Bad, Succession…"
-            value={series}
+          <input className="finput" placeholder="bv. Breaking Bad, Succession…" value={series}
             onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); }}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <div className="field">
           <label className="flabel">Streamingdienst</label>
-          <input className="finput" placeholder="bv. Netflix, Disney+, Prime…"
-            value={streaming}
+          <input className="finput" placeholder="bv. Netflix, Disney+, Prime…" value={streaming}
             onChange={e => setStreaming(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
@@ -798,10 +493,7 @@ function SearchPage({ library, onSave }) {
           <div className="rcard">
             <div className="rheader">
               <div className="rtitle">{result.title}</div>
-              <div className="svc-chip">
-                <div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} />
-                <span className="svc-name">{result.streaming_service}</span>
-              </div>
+              <div className="svc-chip"><div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} /><span className="svc-name">{result.streaming_service}</span></div>
             </div>
             <div className="rmeta">
               {result.year && <span className="ytag">{result.year}</span>}
@@ -809,26 +501,15 @@ function SearchPage({ library, onSave }) {
             </div>
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
-              <div className="rbox">
-                <span className="ricon">⭐</span>
-                <div><div className="rl">IMDb</div><div className={"rv " + (result.imdb_rating ? "imdb" : "none")}>{result.imdb_rating || "N/B"}</div></div>
-              </div>
-              <div className="rbox">
-                <span className="ricon">🍅</span>
-                <div><div className="rl">RT</div><div className={"rv " + (result.rt_rating ? "rt" : "none")}>{result.rt_rating || "N/B"}</div></div>
-              </div>
+              <div className="rbox"><span className="ricon">⭐</span><div><div className="rl">IMDb</div><div className={"rv " + (result.imdb_rating ? "imdb" : "none")}>{result.imdb_rating || "N/B"}</div></div></div>
+              <div className="rbox"><span className="ricon">🍅</span><div><div className="rl">RT</div><div className={"rv " + (result.rt_rating ? "rt" : "none")}>{result.rt_rating || "N/B"}</div></div></div>
             </div>
             <div className="rlinks">
               {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {result.streaming_service}</a>}
               {result.imdb_url && <a href={result.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
               {result.rt_url && <a href={result.rt_url} target="_blank" rel="noopener noreferrer" className="lb sec">🍅 RT</a>}
-              <button
-                className={"lb " + (saved || alreadySaved ? "saved" : "save")}
-                onClick={() => {
-                  if (alreadySaved) return;
-                  onSave({ ...result, id: "s" + Date.now(), savedAt: new Date().toISOString() });
-                  setSaved(true);
-                }}
+              <button className={"lb " + (saved || alreadySaved ? "saved" : "save")}
+                onClick={() => { if (alreadySaved) return; onSave({ ...result, id: "s" + Date.now(), savedAt: new Date().toISOString() }); setSaved(true); }}
                 disabled={saved || alreadySaved}>
                 {saved || alreadySaved ? "✓ Opgeslagen" : "+ Opslaan in bibliotheek"}
               </button>
@@ -841,7 +522,7 @@ function SearchPage({ library, onSave }) {
   );
 }
 
-// ─── Import page ───────────────────────────────────────────────────────────
+// ─── Import ────────────────────────────────────────────────────────────────
 function ImportPage({ currentLibrary, onLibraryUpdate }) {
   const [phase, setPhase] = useState("idle");
   const [savedCount, setSavedCount] = useState(0);
@@ -849,7 +530,6 @@ function ImportPage({ currentLibrary, onLibraryUpdate }) {
   const [bstates, setBstates] = useState(BATCHES.map(() => "pending"));
   const [errors, setErrors] = useState([]);
   const running = useRef(false);
-
   const pct = phase === "step2" ? Math.round((enriched / IMPORT_LIST.length) * 100) : phase === "done" ? 100 : 0;
 
   async function start() {
@@ -857,84 +537,44 @@ function ImportPage({ currentLibrary, onLibraryUpdate }) {
     setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0);
     setBstates(BATCHES.map(() => "pending"));
 
-    // Stap 1: sla alles direct op met basisdata
     const existingTitles = new Set(currentLibrary.map(e => (e.title || "").toLowerCase()));
-    const basic = IMPORT_LIST
-      .filter(s => !existingTitles.has(s.title.toLowerCase()))
-      .map((s, i) => ({
-        id: "imp" + Date.now() + i,
-        title: s.title, streaming_service: s.streaming_service, streaming_url: s.streaming_url,
-        genres: [], year: null, description: null,
-        imdb_rating: null, imdb_url: null, rt_rating: null, rt_url: null,
-        savedAt: new Date().toISOString(), enriched: false,
-      }));
+    const basic = IMPORT_LIST.filter(s => !existingTitles.has(s.title.toLowerCase()))
+      .map((s, i) => ({ id: "imp" + Date.now() + i, title: s.title, streaming_service: s.streaming_service, streaming_url: s.streaming_url, genres: [], year: null, description: null, imdb_rating: null, imdb_url: null, rt_rating: null, rt_url: null, savedAt: new Date().toISOString(), enriched: false }));
 
     const merged = [...basic, ...currentLibrary];
     setSavedCount(basic.length);
-    saveLib(merged);
-    onLibraryUpdate([...merged]);
+    saveLib(merged); onLibraryUpdate([...merged]);
     setPhase("step2");
 
-    // Stap 2: AI verrijking per batch
     let working = [...merged];
     for (let bi = 0; bi < BATCHES.length; bi++) {
       if (!running.current) break;
       setBstates(p => p.map((s, idx) => idx === bi ? "running" : s));
-
-      const batchSeries = BATCHES[bi].filter(s => {
-        const found = working.find(w => w.title.toLowerCase() === s.title.toLowerCase());
-        return found && !found.enriched;
-      });
-
-      if (!batchSeries.length) {
-        setBstates(p => p.map((s, idx) => idx === bi ? "done" : s));
-        continue;
-      }
-
+      const batchSeries = BATCHES[bi].filter(s => { const f = working.find(w => w.title.toLowerCase() === s.title.toLowerCase()); return f && !f.enriched; });
+      if (!batchSeries.length) { setBstates(p => p.map((s, idx) => idx === bi ? "done" : s)); continue; }
       try {
         const list = batchSeries.map((s, i) => (i + 1) + '. "' + s.title + '" (' + s.streaming_service + ")").join("\n");
-        const prompt =
-          "Geef TV serie informatie als JSON array voor " + batchSeries.length + " items:\n" + list + "\n\n" +
-          "Elk object: {\"year\":\"JJJJ of null\",\"genres\":[\"string\"],\"desc\":\"2-3 zinnen Nederlands\"," +
-          "\"imdb\":\"X.X/10 of null\",\"imdb_url\":\"url of null\",\"rt\":\"XX% of null\",\"rt_url\":\"url of null\"}\n\n" +
-          "Geef ALLEEN de raw JSON array terug. Begin met [ en eindig met ].";
-
+        const prompt = "Geef TV serie informatie als JSON array voor " + batchSeries.length + " items:\n" + list + "\n\nElk object: {\"year\":\"JJJJ of null\",\"genres\":[\"string\"],\"desc\":\"2-3 zinnen Nederlands\",\"imdb\":\"X.X/10 of null\",\"imdb_url\":\"url of null\",\"rt\":\"XX% of null\",\"rt_url\":\"url of null\"}\n\nGeef ALLEEN de raw JSON array terug. Begin met [ en eindig met ].";
         const text = await claude([{ role: "user", content: prompt }], 4000);
         const aiResults = parseJsonArray(text);
-
         aiResults.forEach((ai, i) => {
           if (!ai) return;
           const orig = batchSeries[i]; if (!orig) return;
           const idx = working.findIndex(w => w.title.toLowerCase() === orig.title.toLowerCase());
           if (idx === -1) return;
-          working[idx] = {
-            ...working[idx],
-            year: ai.year || working[idx].year,
-            genres: Array.isArray(ai.genres) && ai.genres.length ? ai.genres : working[idx].genres,
-            description: ai.desc || working[idx].description,
-            imdb_rating: ai.imdb || working[idx].imdb_rating,
-            imdb_url: typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http") ? ai.imdb_url : working[idx].imdb_url,
-            rt_rating: ai.rt || working[idx].rt_rating,
-            rt_url: typeof ai.rt_url === "string" && ai.rt_url.startsWith("http") ? ai.rt_url : working[idx].rt_url,
-            enriched: true,
-          };
+          working[idx] = { ...working[idx], year: ai.year || working[idx].year, genres: Array.isArray(ai.genres) && ai.genres.length ? ai.genres : working[idx].genres, description: ai.desc || working[idx].description, imdb_rating: ai.imdb || working[idx].imdb_rating, imdb_url: typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http") ? ai.imdb_url : working[idx].imdb_url, rt_rating: ai.rt || working[idx].rt_rating, rt_url: typeof ai.rt_url === "string" && ai.rt_url.startsWith("http") ? ai.rt_url : working[idx].rt_url, enriched: true };
         });
-
         setEnriched(n => n + batchSeries.length);
-        saveLib(working);
-        onLibraryUpdate([...working]);
+        saveLib(working); onLibraryUpdate([...working]);
         setBstates(p => p.map((s, idx) => idx === bi ? "done" : s));
       } catch (err) {
         const preview = batchSeries.slice(0, 2).map(s => s.title).join(", ");
         setErrors(p => [...p, "Batch " + (bi + 1) + " (" + preview + "…): " + err.message]);
         setBstates(p => p.map((s, idx) => idx === bi ? "error" : s));
       }
-
       if (bi < BATCHES.length - 1) await new Promise(r => setTimeout(r, 1200));
     }
-
-    running.current = false;
-    setPhase("done");
+    running.current = false; setPhase("done");
   }
 
   return (
@@ -942,76 +582,16 @@ function ImportPage({ currentLibrary, onLibraryUpdate }) {
       <div className="ip">
         <p className="eyebrow">Bulk Import · {IMPORT_LIST.length} series</p>
         <h1 className="big-title">SERIE<em>IMPORT</em></h1>
-        <p style={{ fontSize: 14, color: "#6e6e73", marginBottom: 20, marginTop: 7, lineHeight: 1.6 }}>
-          Stap 1: alle series direct opslaan. Stap 2: AI verrijkt met genre, omschrijving en ratings.
-        </p>
-
-        {phase === "idle" && (
-          <div className="imp-card">
-            <p style={{ fontSize: 13, color: "#6e6e73", lineHeight: 1.7, marginBottom: 14 }}>
-              <strong>{IMPORT_LIST.length} series</strong> · {BATCHES.length} batches van 8.<br />
-              Bibliotheek is direct zichtbaar na stap 1.
-            </p>
-            <button className="btn-red" onClick={start}>START IMPORT</button>
-          </div>
-        )}
-
+        <p style={{ fontSize: 14, color: "#6e6e73", marginBottom: 20, marginTop: 7, lineHeight: 1.6 }}>Stap 1: alle series direct opslaan. Stap 2: AI verrijkt met genre, omschrijving en ratings.</p>
+        {phase === "idle" && <div className="imp-card"><p style={{ fontSize: 13, color: "#6e6e73", lineHeight: 1.7, marginBottom: 14 }}><strong>{IMPORT_LIST.length} series</strong> · {BATCHES.length} batches van 8.<br />Bibliotheek is direct zichtbaar na stap 1.</p><button className="btn-red" onClick={start}>START IMPORT</button></div>}
         {(phase === "step1" || phase === "step2") && (
           <div className="imp-card">
-            {phase === "step1" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                <span className="spin" />
-                <span style={{ fontSize: 14, color: "#6e6e73" }}>Basisdata opslaan…</span>
-              </div>
-            )}
-            {phase === "step2" && (
-              <>
-                <div className="prog-row">
-                  <div className="prog-lbl"><span className="spin" />AI verrijking</div>
-                  <div className="prog-n">{pct}%</div>
-                </div>
-                <div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div>
-                <div className="prog-sub">{enriched} van {IMPORT_LIST.length} verrijkt</div>
-                <div className="brow">
-                  {BATCHES.map((_, i) => (
-                    <div key={i} className={"bp " + (bstates[i] || "pending")}>
-                      {bstates[i] === "running" && <span className="spin" style={{ width: 9, height: 9, marginRight: 0 }} />}
-                      {bstates[i] === "done" && "✓ "}
-                      {bstates[i] === "error" && "✕ "}
-                      B{i + 1}
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
+            {phase === "step1" && <div style={{ display: "flex", alignItems: "center", gap: 9 }}><span className="spin" /><span style={{ fontSize: 14, color: "#6e6e73" }}>Basisdata opslaan…</span></div>}
+            {phase === "step2" && <><div className="prog-row"><div className="prog-lbl"><span className="spin" />AI verrijking</div><div className="prog-n">{pct}%</div></div><div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div><div className="prog-sub">{enriched} van {IMPORT_LIST.length} verrijkt</div><div className="brow">{BATCHES.map((_, i) => <div key={i} className={"bp " + (bstates[i] || "pending")}>{bstates[i] === "running" && <span className="spin" style={{ width: 9, height: 9, marginRight: 0 }} />}{bstates[i] === "done" && "✓ "}{bstates[i] === "error" && "✕ "}B{i + 1}</div>)}</div></>}
           </div>
         )}
-
-        {phase === "done" && (
-          <div className="done-card">
-            <div className="done-ico">✓</div>
-            <div className="done-title">{savedCount} SERIES OPGESLAGEN</div>
-            <div className="done-sub">
-              {enriched} verrijkt met AI.
-              {errors.length > 0 && " · " + errors.length + " batch(es) deels mislukt."}
-              <br />Open de <strong style={{ color: "#28a745" }}>Bibliotheek</strong>.
-            </div>
-            <div style={{ marginTop: 14 }}>
-              <button className="btn-ghost" onClick={() => {
-                setPhase("idle"); setEnriched(0); setSavedCount(0);
-                setErrors([]); setBstates(BATCHES.map(() => "pending"));
-              }}>
-                Opnieuw importeren
-              </button>
-            </div>
-          </div>
-        )}
-
-        {errors.length > 0 && (
-          <div className="errs">
-            {errors.map((e, i) => <div key={i} className="ei">{e}</div>)}
-          </div>
-        )}
+        {phase === "done" && <div className="done-card"><div className="done-ico">✓</div><div className="done-title">{savedCount} SERIES OPGESLAGEN</div><div className="done-sub">{enriched} verrijkt met AI.{errors.length > 0 && " · " + errors.length + " batch(es) deels mislukt."}<br />Open de <strong style={{ color: "#28a745" }}>Bibliotheek</strong>.</div><div style={{ marginTop: 14 }}><button className="btn-ghost" onClick={() => { setPhase("idle"); setEnriched(0); setSavedCount(0); setErrors([]); setBstates(BATCHES.map(() => "pending")); }}>Opnieuw importeren</button></div></div>}
+        {errors.length > 0 && <div className="errs">{errors.map((e, i) => <div key={i} className="ei">{e}</div>)}</div>}
       </div>
     </div>
   );
@@ -1019,36 +599,18 @@ function ImportPage({ currentLibrary, onLibraryUpdate }) {
 
 // ─── Root ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [apiKey, setApiKey] = useState(null);
-  const [showKeyModal, setShowKeyModal] = useState(false);
   const [page, setPage] = useState("search");
   const [library, setLibrary] = useState([]);
   const [enrichingIds, setEnrichingIds] = useState(new Set());
 
-  useEffect(() => {
-    setApiKey(getKey());
-    setLibrary(loadLib());
-  }, []);
+  useEffect(() => { setLibrary(loadLib()); }, []);
 
   function updateLibrary(items) {
     setLibrary([...items]);
     setEnrichingIds(new Set(items.filter(i => i.enriched === false).map(i => i.id)));
   }
-
-  async function addItem(item) {
-    const updated = [item, ...library];
-    setLibrary(updated);
-    saveLib(updated);
-  }
-
-  async function deleteItem(id) {
-    const updated = library.filter(i => i.id !== id);
-    setLibrary(updated);
-    saveLib(updated);
-  }
-
-  if (apiKey === null) return null;
-  if (!apiKey) return <Onboarding onDone={k => setApiKey(k)} />;
+  function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
+  function deleteItem(id) { const u = library.filter(i => i.id !== id); setLibrary(u); saveLib(u); }
 
   return (
     <>
@@ -1056,25 +618,17 @@ export default function App() {
       <div style={{ minHeight: "100vh", background: "#f5f5f7" }}>
         <nav className="nav">
           <div className="logo" onClick={() => setPage("search")}>SERIE<em>INFO</em></div>
-          <div className="nav-right">
-            <div className="tabs">
-              <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>🔍 Zoeken</button>
-              <button className={"tab " + (page === "library" ? "on" : "")} onClick={() => setPage("library")}>
-                📚 Bibliotheek{library.length > 0 && <span className="badge">{library.length}</span>}
-              </button>
-              <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>📥 Import</button>
-            </div>
-            <button className="key-btn" onClick={() => setShowKeyModal(true)}>🔑 Key</button>
+          <div className="tabs">
+            <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>🔍 Zoeken</button>
+            <button className={"tab " + (page === "library" ? "on" : "")} onClick={() => setPage("library")}>
+              📚 Bibliotheek{library.length > 0 && <span className="badge">{library.length}</span>}
+            </button>
+            <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>📥 Import</button>
           </div>
         </nav>
-
         {page === "search" && <SearchPage library={library} onSave={addItem} />}
         {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onGo={setPage} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} />}
-
-        {showKeyModal && (
-          <KeyModal current={apiKey} onSave={k => setApiKey(k)} onClose={() => setShowKeyModal(false)} />
-        )}
       </div>
     </>
   );
