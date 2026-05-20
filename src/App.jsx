@@ -7,7 +7,7 @@ async function claude(messages, maxTokens = 1000) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-3-5-haiku-20241022",
       max_tokens: maxTokens,
       messages,
     }),
@@ -518,16 +518,17 @@ async function researchSeries(title, streamingService) {
 function EditModal({ item, onSave, onClose }) {
   const { guard, PinGate } = usePinGuard();
   const [form, setForm] = useState({
-    year: item.year || "",
-    genres: (item.genres || []).join(", "),
+    year:        item.year        || "",
+    genres:      (item.genres || []).join(", "),
     description: item.description || "",
     imdb_rating: item.imdb_rating || "",
-    imdb_url: item.imdb_url || "",
-    rt_rating: item.rt_rating || "",
-    rt_url: item.rt_url || "",
+    imdb_url:    item.imdb_url    || "",
+    rt_rating:   item.rt_rating   || "",
+    rt_url:      item.rt_url      || "",
   });
-  const [searching, setSearching] = useState(false);
-  const [searchErr, setSearchErr] = useState("");
+  const [searching, setSearching]  = useState(false);
+  const [searchErr, setSearchErr]  = useState("");
+  const [searchOk,  setSearchOk]   = useState(false);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -536,96 +537,135 @@ function EditModal({ item, onSave, onClose }) {
   }, []);
 
   async function doResearch() {
-    setSearching(true); setSearchErr("");
+    setSearching(true); setSearchErr(""); setSearchOk(false);
     try {
       const ai = await researchSeries(item.title, item.streaming_service);
-      setForm({
-        year: ai.year || form.year,
-        genres: Array.isArray(ai.genres) && ai.genres.length ? ai.genres.join(", ") : form.genres,
-        description: ai.desc || form.description,
-        imdb_rating: ai.imdb || form.imdb_rating,
-        imdb_url: typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http") ? ai.imdb_url : form.imdb_url,
-        rt_rating: ai.rt || form.rt_rating,
-        rt_url: typeof ai.rt_url === "string" && ai.rt_url.startsWith("http") ? ai.rt_url : form.rt_url,
-      });
-    } catch (e) { setSearchErr(e.message || "Zoeken mislukt"); }
-    finally { setSearching(false); }
+      setForm(f => ({
+        year:        ai.year || f.year,
+        genres:      Array.isArray(ai.genres) && ai.genres.length ? ai.genres.join(", ") : f.genres,
+        description: ai.desc || f.description,
+        imdb_rating: ai.imdb || f.imdb_rating,
+        imdb_url:    (typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http")) ? ai.imdb_url : f.imdb_url,
+        rt_rating:   ai.rt   || f.rt_rating,
+        rt_url:      (typeof ai.rt_url   === "string" && ai.rt_url.startsWith("http"))   ? ai.rt_url   : f.rt_url,
+      }));
+      setSearchOk(true);
+    } catch (e) {
+      setSearchErr(e.message || "Zoeken mislukt");
+    } finally {
+      setSearching(false);
+    }
   }
 
   function handleSave() {
     guard(() => {
-      const updated = {
+      onSave({
         ...item,
-        year: form.year || null,
-        genres: form.genres ? form.genres.split(",").map(g => g.trim()).filter(Boolean) : [],
+        year:        form.year        || null,
+        genres:      form.genres ? form.genres.split(",").map(g => g.trim()).filter(Boolean) : [],
         description: form.description || null,
         imdb_rating: form.imdb_rating || null,
-        imdb_url: form.imdb_url || null,
-        rt_rating: form.rt_rating || null,
-        rt_url: form.rt_url || null,
-        enriched: true,
-      };
-      onSave(updated);
+        imdb_url:    form.imdb_url    || null,
+        rt_rating:   form.rt_rating   || null,
+        rt_url:      form.rt_url      || null,
+        enriched:    true,
+      });
       onClose();
     });
   }
 
-  const fld = (label, key, opts = {}) => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      <label style={{ fontSize: 11, letterSpacing: ".15em", textTransform: "uppercase", color: "#6e6e73", fontWeight: 600 }}>{label}</label>
-      {opts.textarea
-        ? <textarea rows={3} style={{ background: "#f5f5f7", border: "1.5px solid #e5e5ea", borderRadius: 8, color: "#1a1a2e", fontFamily: "Inter, sans-serif", fontSize: 14, padding: "10px 13px", outline: "none", resize: "vertical", lineHeight: 1.6 }}
-            value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} />
-        : <input style={{ background: "#f5f5f7", border: "1.5px solid #e5e5ea", borderRadius: 8, color: "#1a1a2e", fontFamily: "Inter, sans-serif", fontSize: 14, padding: "10px 13px", outline: "none" }}
-            value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} />}
+  const inp = (label, key) => (
+    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+      <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>{label}</label>
+      <input
+        style={{ background:"#f5f5f7", border:"1.5px solid #e5e5ea", borderRadius:8,
+                 color:"#1a1a2e", fontFamily:"Inter,sans-serif", fontSize:14,
+                 padding:"9px 12px", outline:"none", width:"100%" }}
+        value={form[key]}
+        onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+      />
     </div>
   );
 
   const content = (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 640 }}>
-        <button className="modal-close" onClick={onClose}>✕</button>
-        <div className="modal-header" style={{ marginBottom: 0 }}>
-          <div className="modal-title">{item.title}</div>
+      <div className="modal" style={{ maxWidth:660, display:"flex", flexDirection:"column", gap:0 }}>
+
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between",
+                      gap:12, marginBottom:16, paddingRight:36 }}>
+          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(22px,3vw,32px)",
+                        letterSpacing:".03em", color:"#1a1a2e", lineHeight:1.05 }}>
+            {item.title}
+          </div>
           <div className="svc-chip">
             <div className="svc-dot" style={{ background: svcColor(item.streaming_service) }} />
             <span className="svc-name">{item.streaming_service}</span>
           </div>
         </div>
+        <button className="modal-close" onClick={onClose}>✕</button>
 
-        {/* AI re-search button */}
-        <div style={{ margin: "16px 0", padding: "14px 16px", background: "#f5f5f7", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        {/* AI re-search — always visible at top */}
+        <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:10,
+                      padding:"14px 16px", marginBottom:18,
+                      display:"flex", alignItems:"center", justifyContent:"space-between",
+                      gap:12, flexWrap:"wrap" }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>AI Herzoeken</div>
-            <div style={{ fontSize: 12, color: "#6e6e73" }}>Haal automatisch nieuwe gegevens op voor deze serie</div>
+            <div style={{ fontSize:14, fontWeight:600, color:"#1a1a2e", marginBottom:3 }}>
+              🔍 AI Herzoeken
+            </div>
+            <div style={{ fontSize:12, color:"#6e6e73" }}>
+              Haal automatisch nieuwe gegevens op voor deze serie
+            </div>
+            {searchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:4 }}>⚠️ {searchErr}</div>}
+            {searchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:4 }}>✓ Gegevens bijgewerkt</div>}
           </div>
-          <button className="btn-red" style={{ fontSize: 13, padding: "9px 18px", flexShrink: 0 }} onClick={doResearch} disabled={searching}>
-            {searching ? <><span className="spin" />Zoeken…</> : "🔍 AI Herzoeken"}
+          <button
+            onClick={doResearch}
+            disabled={searching}
+            style={{ background: searching ? "#b8d4f0" : "#0066cc", border:"none", borderRadius:7,
+                     color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                     padding:"9px 18px", cursor: searching ? "not-allowed" : "pointer",
+                     display:"flex", alignItems:"center", gap:6, flexShrink:0 }}
+          >
+            {searching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Zoeken…</> : "Zoek opnieuw"}
           </button>
         </div>
-        {searchErr && <div className="err-bar" style={{ marginBottom: 12 }}>⚠️ {searchErr}</div>}
 
         {/* Editable fields */}
-        <div className="modal-body">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {fld("Jaar", "year")}
-            {fld("Genres (komma-gescheiden)", "genres")}
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {inp("Jaar", "year")}
+            {inp("Genres (komma-gescheiden)", "genres")}
           </div>
-          {fld("Omschrijving", "description", { textarea: true })}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {fld("IMDb score (bv. 8.2/10)", "imdb_rating")}
-            {fld("IMDb URL", "imdb_url")}
+          <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+            <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>Omschrijving</label>
+            <textarea rows={3}
+              style={{ background:"#f5f5f7", border:"1.5px solid #e5e5ea", borderRadius:8,
+                       color:"#1a1a2e", fontFamily:"Inter,sans-serif", fontSize:14,
+                       padding:"9px 12px", outline:"none", resize:"vertical", lineHeight:1.6, width:"100%" }}
+              value={form.description}
+              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {fld("RT score (bv. 87%)", "rt_rating")}
-            {fld("RT URL", "rt_url")}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {inp("IMDb score (bv. 8.2/10)", "imdb_rating")}
+            {inp("IMDb URL", "imdb_url")}
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {inp("RT score (bv. 87%)", "rt_rating")}
+            {inp("RT URL", "rt_url")}
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
-          <button className="btn-red" style={{ flex: 1 }} onClick={handleSave}>Opslaan 🔒</button>
+        {/* Buttons */}
+        <div style={{ display:"flex", gap:8, marginTop:20 }}>
+          <button className="btn-red" style={{ flex:1 }} onClick={handleSave}>
+            🔒 Opslaan
+          </button>
           <button className="btn-ghost" onClick={onClose}>Annuleer</button>
         </div>
+
       </div>
     </div>
   );
@@ -635,6 +675,7 @@ function EditModal({ item, onSave, onClose }) {
     <PinGate />
   </>;
 }
+
 
 // ─── Library ───────────────────────────────────────────────────────────────
 function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdate, onGo }) {
@@ -732,7 +773,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div className="lrow-svc">{item.streaming_service}</div>
                       <button className="lrow-del" title="Verwijder" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>✕</button>
-                      <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setEditing(item); }}>✎</button>
+                      <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>✎</button>
                     </div>
                     <div className="lrow-btns">
                       {!isEnriching && <>{item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}{item.rt_rating && <span className="lrow-r rt">🍅 {item.rt_rating}</span>}</>}
