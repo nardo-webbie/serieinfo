@@ -146,7 +146,7 @@ function chunk(arr, n) {
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
   return out;
 }
-const BATCHES = chunk(IMPORT_LIST, 8);
+const BATCHES = chunk(IMPORT_LIST, 5);
 
 // ─── CSS ──────────────────────────────────────────────────────────────────
 const CSS = `
@@ -498,14 +498,153 @@ function DetailModal({ item, onClose, onDelete }) {
   </>;
 }
 
+
+// ─── Single series AI re-search ───────────────────────────────────────────
+async function researchSeries(title, streamingService) {
+  const prompt =
+    'You are a TV series expert. Find accurate information for the TV series "' + title + '" available on ' + streamingService + '.\n\n' +
+    'Return ONLY a raw JSON object with these exact fields:\n' +
+    '{"year":"YYYY or YYYY-YYYY or null","genres":["string"],' +
+    '"desc":"2-3 sentences English description of the actual plot","imdb":"X.X/10 or null",' +
+    '"imdb_url":"https://www.imdb.com/title/... or null","rt":"XX% or null",' +
+    '"rt_url":"https://www.rottentomatoes.com/tv/... or null"}\n\n' +
+    'Be accurate. If uncertain about a field return null. Start with { and end with }.';
+
+  const text = await claude([{ role: "user", content: prompt }], 800);
+  return parseJsonObject(text);
+}
+
+// ─── Edit Modal ────────────────────────────────────────────────────────────
+function EditModal({ item, onSave, onClose }) {
+  const { guard, PinGate } = usePinGuard();
+  const [form, setForm] = useState({
+    year: item.year || "",
+    genres: (item.genres || []).join(", "),
+    description: item.description || "",
+    imdb_rating: item.imdb_rating || "",
+    imdb_url: item.imdb_url || "",
+    rt_rating: item.rt_rating || "",
+    rt_url: item.rt_url || "",
+  });
+  const [searching, setSearching] = useState(false);
+  const [searchErr, setSearchErr] = useState("");
+
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  async function doResearch() {
+    setSearching(true); setSearchErr("");
+    try {
+      const ai = await researchSeries(item.title, item.streaming_service);
+      setForm({
+        year: ai.year || form.year,
+        genres: Array.isArray(ai.genres) && ai.genres.length ? ai.genres.join(", ") : form.genres,
+        description: ai.desc || form.description,
+        imdb_rating: ai.imdb || form.imdb_rating,
+        imdb_url: typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http") ? ai.imdb_url : form.imdb_url,
+        rt_rating: ai.rt || form.rt_rating,
+        rt_url: typeof ai.rt_url === "string" && ai.rt_url.startsWith("http") ? ai.rt_url : form.rt_url,
+      });
+    } catch (e) { setSearchErr(e.message || "Zoeken mislukt"); }
+    finally { setSearching(false); }
+  }
+
+  function handleSave() {
+    guard(() => {
+      const updated = {
+        ...item,
+        year: form.year || null,
+        genres: form.genres ? form.genres.split(",").map(g => g.trim()).filter(Boolean) : [],
+        description: form.description || null,
+        imdb_rating: form.imdb_rating || null,
+        imdb_url: form.imdb_url || null,
+        rt_rating: form.rt_rating || null,
+        rt_url: form.rt_url || null,
+        enriched: true,
+      };
+      onSave(updated);
+      onClose();
+    });
+  }
+
+  const fld = (label, key, opts = {}) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+      <label style={{ fontSize: 11, letterSpacing: ".15em", textTransform: "uppercase", color: "#6e6e73", fontWeight: 600 }}>{label}</label>
+      {opts.textarea
+        ? <textarea rows={3} style={{ background: "#f5f5f7", border: "1.5px solid #e5e5ea", borderRadius: 8, color: "#1a1a2e", fontFamily: "Inter, sans-serif", fontSize: 14, padding: "10px 13px", outline: "none", resize: "vertical", lineHeight: 1.6 }}
+            value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} />
+        : <input style={{ background: "#f5f5f7", border: "1.5px solid #e5e5ea", borderRadius: 8, color: "#1a1a2e", fontFamily: "Inter, sans-serif", fontSize: 14, padding: "10px 13px", outline: "none" }}
+            value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} />}
+    </div>
+  );
+
+  const content = (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 640 }}>
+        <button className="modal-close" onClick={onClose}>✕</button>
+        <div className="modal-header" style={{ marginBottom: 0 }}>
+          <div className="modal-title">{item.title}</div>
+          <div className="svc-chip">
+            <div className="svc-dot" style={{ background: svcColor(item.streaming_service) }} />
+            <span className="svc-name">{item.streaming_service}</span>
+          </div>
+        </div>
+
+        {/* AI re-search button */}
+        <div style={{ margin: "16px 0", padding: "14px 16px", background: "#f5f5f7", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>AI Herzoeken</div>
+            <div style={{ fontSize: 12, color: "#6e6e73" }}>Haal automatisch nieuwe gegevens op voor deze serie</div>
+          </div>
+          <button className="btn-red" style={{ fontSize: 13, padding: "9px 18px", flexShrink: 0 }} onClick={doResearch} disabled={searching}>
+            {searching ? <><span className="spin" />Zoeken…</> : "🔍 AI Herzoeken"}
+          </button>
+        </div>
+        {searchErr && <div className="err-bar" style={{ marginBottom: 12 }}>⚠️ {searchErr}</div>}
+
+        {/* Editable fields */}
+        <div className="modal-body">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {fld("Jaar", "year")}
+            {fld("Genres (komma-gescheiden)", "genres")}
+          </div>
+          {fld("Omschrijving", "description", { textarea: true })}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {fld("IMDb score (bv. 8.2/10)", "imdb_rating")}
+            {fld("IMDb URL", "imdb_url")}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {fld("RT score (bv. 87%)", "rt_rating")}
+            {fld("RT URL", "rt_url")}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+          <button className="btn-red" style={{ flex: 1 }} onClick={handleSave}>Opslaan 🔒</button>
+          <button className="btn-ghost" onClick={onClose}>Annuleer</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return <>
+    {createPortal(content, document.body)}
+    <PinGate />
+  </>;
+}
+
 // ─── Library ───────────────────────────────────────────────────────────────
-function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onGo }) {
+function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdate, onGo }) {
   const { guard, PinGate } = usePinGuard();
   const [q, setQ] = useState("");
   const [svc, setSvc] = useState("");
   const [sort, setSort] = useState("recent");
   const [hideWatched, setHideWatched] = useState(false);
   const [sel, setSel] = useState(null);
+  const [editing, setEditing] = useState(null);
 
   useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
@@ -592,7 +731,8 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onGo })
                   <div className="lrow-right">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div className="lrow-svc">{item.streaming_service}</div>
-                      <button className="lrow-del" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>✕</button>
+                      <button className="lrow-del" title="Verwijder" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>✕</button>
+                      <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setEditing(item); }}>✎</button>
                     </div>
                     <div className="lrow-btns">
                       {!isEnriching && <>{item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}{item.rt_rating && <span className="lrow-r rt">🍅 {item.rt_rating}</span>}</>}
@@ -606,6 +746,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onGo })
         )}
       </div>
       {sel && <DetailModal item={sel} onClose={() => setSel(null)} onDelete={id => { onDelete(id); setSel(null); }} />}
+      {editing && <EditModal item={editing} onSave={onUpdate} onClose={() => setEditing(null)} />}
       <PinGate />
     </div>
   );
@@ -734,8 +875,8 @@ function ImportPage({ currentLibrary, onLibraryUpdate }) {
       const batchSeries = BATCHES[bi].filter(s => { const f = working.find(w => w.title.toLowerCase() === s.title.toLowerCase()); return f && !f.enriched; });
       if (!batchSeries.length) { setBstates(p => p.map((s, idx) => idx === bi ? "done" : s)); continue; }
       try {
-        const list = batchSeries.map((s, i) => (i + 1) + '. "' + s.title + '" (' + s.streaming_service + ")").join("\n");
-        const prompt = "Geef TV serie informatie als JSON array voor " + batchSeries.length + " items:\n" + list + "\n\nElk object: {\"year\":\"JJJJ of null\",\"genres\":[\"string\"],\"desc\":\"2-3 zinnen Nederlands\",\"imdb\":\"X.X/10 of null\",\"imdb_url\":\"url of null\",\"rt\":\"XX% of null\",\"rt_url\":\"url of null\"}\n\nGeef ALLEEN de raw JSON array terug. Begin met [ en eindig met ].";
+        const list = batchSeries.map((s, i) => (i + 1) + '. "' + s.title + '" — streaming on ' + s.streaming_service).join("\n");
+        const prompt = "You are a TV series database expert. Return accurate information for these " + batchSeries.length + " TV series as a JSON array.\n\nSeries:\n" + list + "\n\nFor each series return an object with these exact keys:\n- year: release year like \"2021\" or year range \"2019-2023\" or null\n- genres: array of genre strings (e.g. [\"Drama\", \"Thriller\"])\n- desc: 2-3 sentence English description of the actual plot/premise. Be accurate — if unsure, keep it brief and factual.\n- imdb: IMDb rating like \"8.2/10\" or null if unknown\n- imdb_url: full IMDb series URL or null\n- rt: Rotten Tomatoes score like \"87%\" or null if unknown\n- rt_url: full Rotten Tomatoes URL or null\n\nIMPORTANT: Match the exact series on the specified platform. If you are not sure about a series, return null for uncertain fields rather than guessing.\n\nReturn ONLY the raw JSON array. Start with [ and end with ].";
         const text = await claude([{ role: "user", content: prompt }], 4000);
         const aiResults = parseJsonArray(text);
         aiResults.forEach((ai, i) => {
@@ -791,6 +932,7 @@ export default function App() {
     setEnrichingIds(new Set(items.filter(i => i.enriched === false).map(i => i.id)));
   }
   function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
+  function updateItem(item) { const u = library.map(i => i.id === item.id ? item : i); setLibrary(u); saveLib(u); }
   function deleteItem(id) { const u = library.filter(i => i.id !== id); setLibrary(u); saveLib(u); }
   function toggleWatched(id) { const u = library.map(i => i.id === id ? { ...i, watched: !i.watched } : i); setLibrary(u); saveLib(u); }
 
@@ -809,7 +951,7 @@ export default function App() {
           </div>
         </nav>
         {page === "search" && <SearchPage library={library} onSave={addItem} />}
-        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onGo={setPage} />}
+        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onUpdate={updateItem} onGo={setPage} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} />}
       </div>
     </>
