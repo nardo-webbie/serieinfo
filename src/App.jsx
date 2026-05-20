@@ -13,12 +13,21 @@ async function claude(messages, maxTokens = 1000) {
     }),
   });
 
-  const data = await res.json();
+  // Lees ruwe tekst eerst — voorkomt crash als het geen JSON is
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error("Server fout: " + raw.slice(0, 120));
+  }
+
   if (!res.ok) throw new Error(data?.error?.message || data?.error || "API fout " + res.status);
-  if (data.error) throw new Error(data.error.message || data.error);
+  if (data.error) throw new Error(data.error.message || String(data.error));
 
   let text = "";
   for (const b of data.content || []) if (b.type === "text") text += b.text;
+  if (!text) throw new Error("Leeg antwoord van API");
   return text;
 }
 
