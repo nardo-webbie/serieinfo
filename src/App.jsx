@@ -2,15 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 // ─── API via Vercel proxy (geen directe Anthropic calls) ──────────────────
-async function claude(messages, maxTokens = 1000) {
+async function claude(messages, maxTokens = 1000, system = null) {
+  const body = { model: "claude-haiku-4-5-20251001", max_tokens: maxTokens, messages };
+  if (system) body.system = system;
   const res = await fetch("/api/claude", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: maxTokens,
-      messages,
-    }),
+    body: JSON.stringify(body),
   });
 
   // Lees ruwe tekst eerst — voorkomt crash als het geen JSON is
@@ -517,23 +515,31 @@ function extractImdbId(url) {
 // ─── Fetch series data using IMDb URL ─────────────────────────────────────
 async function fetchFromImdbUrl(imdbUrl, fallbackTitle) {
   const imdbId = extractImdbId(imdbUrl);
-  const ref = imdbId
-    ? 'IMDb title ID ' + imdbId + ' (URL: ' + imdbUrl + ')'
-    : 'IMDb URL: ' + imdbUrl;
+
+  const userMsg = imdbId
+    ? 'Find the TV series with IMDb ID ' + imdbId + '.' + (fallbackTitle ? ' Title hint: "' + fallbackTitle + '".' : '')
+    : 'Find the TV series at IMDb URL: ' + imdbUrl + '.' + (fallbackTitle ? ' Title hint: "' + fallbackTitle + '".' : '');
+
+  const system =
+    'You are a JSON-only API. You MUST respond with a single raw JSON object and nothing else. ' +
+    'No explanation, no markdown, no code fences. Just the JSON object starting with { and ending with }.';
 
   const prompt =
-    'You are a TV series expert with knowledge of IMDb data.\n\n' +
-    'Find information for the TV series with ' + ref + '.\n' +
-    (fallbackTitle ? 'Series title hint: "' + fallbackTitle + '"\n' : '') +
-    '\nReturn ONLY a raw JSON object:\n' +
-    '{"title":"official title","year":"YYYY or YYYY-YYYY or null","genres":["string"],' +
-    '"desc":"2-3 sentences English description of the actual plot",' +
-    '"imdb":"X.X/10 or null","imdb_url":"' + (imdbUrl || 'null') + '"}\n\n' +
-    'The imdb_url field must be exactly: ' + (imdbUrl || 'null') + '\n' +
-    'Be precise — use the specific IMDb ID to find the correct series. Start with { end with }.';
+    userMsg + '\n\n' +
+    'Return this JSON object with accurate data:\n' +
+    '{ "title": "...", "year": "YYYY or YYYY-YYYY or null", "genres": ["..."], ' +
+    '"desc": "2-3 sentence English plot description", ' +
+    '"imdb": "X.X/10 or null", "imdb_url": "' + imdbUrl + '" }';
 
-  const text = await claude([{ role: "user", content: prompt }], 600);
-  return parseJsonObject(text);
+  const text = await claude([{ role: "user", content: prompt }], 500, system);
+
+  // Try to extract JSON even if there's surrounding text
+  const s = text.indexOf("{");
+  const e = text.lastIndexOf("}");
+  if (s === -1 || e === -1 || e <= s) {
+    throw new Error("AI gaf geen JSON terug. Antwoord: " + text.slice(0, 100));
+  }
+  return JSON.parse(text.slice(s, e + 1));
 }
 
 // ─── Single series AI re-search ───────────────────────────────────────────
@@ -546,7 +552,7 @@ async function researchSeries(title, streamingService) {
     '"imdb_url":"https://www.imdb.com/title/ttXXXXXXX/ or null"}\n\n' +
     'Be accurate. If uncertain about a field return null. Start with { and end with }.';
 
-  const text = await claude([{ role: "user", content: prompt }], 600);
+  const text = await claude([{ role: "user", content: prompt }], 600, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
   return parseJsonObject(text);
 }
 
@@ -922,7 +928,7 @@ function SearchPage({ library, onSave }) {
         '"description":"2-3 zinnen Nederlands","imdb_rating":"X.X/10 of null",' +
         '"imdb_url":"full IMDb URL or null",' +
         '"streaming_service":"string","streaming_url":"url of null"}';
-      const text = await claude([{ role: "user", content: prompt }], 900);
+      const text = await claude([{ role: "user", content: prompt }], 900, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
       const parsed = parseJsonObject(text);
       setResult(parsed);
       setImdbUrlOverride(parsed.imdb_url || "");
@@ -1075,7 +1081,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
       try {
         const list = batchSeries.map((s, i) => (i + 1) + '. "' + s.title + '" — streaming on ' + s.streaming_service).join("\n");
         const prompt = "You are a TV series database expert. Return accurate information for these " + batchSeries.length + " TV series as a JSON array.\n\nSeries:\n" + list + "\n\nFor each series return an object with these exact keys:\n- year: release year like \"2021\" or year range \"2019-2023\" or null\n- genres: array of genre strings (e.g. [\"Drama\", \"Thriller\"])\n- desc: 2-3 sentence English description of the actual plot/premise. Be accurate — if unsure, keep it brief and factual.\n- imdb: IMDb rating like \"8.2/10\" or null if unknown\n- imdb_url: full IMDb series URL or null\nIMPORTANT: Match the exact series on the specified platform. If you are not sure about a series, return null for uncertain fields rather than guessing.\n\nReturn ONLY the raw JSON array. Start with [ and end with ].";
-        const text = await claude([{ role: "user", content: prompt }], 4000);
+        const text = await claude([{ role: "user", content: prompt }], 4000, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
         const aiResults = parseJsonArray(text);
         aiResults.forEach((ai, i) => {
           if (!ai) return;
