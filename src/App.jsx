@@ -135,14 +135,14 @@ function parseJsonObject(text) {
 // ─── Import lijst ─────────────────────────────────────────────────────────
 const IMPORT_LIST = [
   ["Unfamiliar","Netflix","https://www.netflix.com"],
-  ["The Friend and Neighbors","Apple TV+","https://tv.apple.com"],
+  ["Your Friends & Neighbors","Apple TV+","https://tv.apple.com"],
   ["Dept Q Season 2","Netflix","https://www.netflix.com"],
   ["Ballard","Prime Video","https://www.primevideo.com"],
   ["The Assassin","Prime Video","https://www.primevideo.com"],
   ["Under Salt Marsh","SkyShowtime","https://www.skyshowtime.com"],
   ["Salvador","Netflix","https://www.netflix.com"],
   ["Imperfect Women","Apple TV+","https://tv.apple.com"],
-  ["A Knight of the Seven Kingdoms","Max","https://www.max.com"],
+  ["A Knight of the Seven Kingdoms: The Hedge Knight","Max","https://www.max.com"],
   ["The Madison","SkyShowtime","https://www.skyshowtime.com"],
   ["Slow Horses Season 5","Apple TV+","https://tv.apple.com"],
   ["Mobland Season 2","SkyShowtime","https://www.skyshowtime.com"],
@@ -165,7 +165,7 @@ const IMPORT_LIST = [
   ["The Night Agent","Netflix","https://www.netflix.com"],
   ["This Town","NPO","https://www.npo.nl"],
   ["How to Get to Heaven from Belfast","Netflix","https://www.netflix.com"],
-  ["His and Hers","Netflix","https://www.netflix.com"],
+  ["His & Hers","Netflix","https://www.netflix.com"],
   ["Black Snow","Netflix","https://www.netflix.com"],
   ["Deadwind","Netflix","https://www.netflix.com"],
   ["Nero the Assassin","Netflix","https://www.netflix.com"],
@@ -582,6 +582,44 @@ function extractImdbId(url) {
   return m ? m[0] : null;
 }
 
+// ─── Extract TMDB TV ID from URL ──────────────────────────────────────────
+function extractTmdbId(url) {
+  const m = (url || "").match(/\/tv\/([0-9]+)/);
+  return m ? m[1] : null;
+}
+
+// ─── Fetch from specific TMDB ID ─────────────────────────────────────────
+async function fetchFromTmdbId(tmdbId) {
+  const key = getTmdbKey();
+  if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
+
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+  const base = "https://api.themoviedb.org/3/tv/" + tmdbId;
+
+  const [det, ext] = await Promise.all([
+    fetch(base + "?language=en-US", { headers }).then(r => r.json()),
+    fetch(base + "/external_ids",   { headers }).then(r => r.json()),
+  ]);
+
+  if (det.success === false) throw new Error("Serie niet gevonden op TMDB (ID " + tmdbId + ")");
+
+  const year    = det.first_air_date ? det.first_air_date.slice(0, 4) : null;
+  const endYear = det.last_air_date  ? det.last_air_date.slice(0, 4)  : null;
+  const yearStr = year && endYear && endYear !== year ? year + "–" + endYear : year;
+  const imdbId  = ext.imdb_id || null;
+
+  return {
+    title:       det.name || null,
+    year:        yearStr,
+    genres:      (det.genres || []).map(g => g.name),
+    description: det.overview || null,
+    imdb_rating: null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    source:      "tmdb",
+  };
+}
+
 // ─── Fetch series data using IMDb URL ─────────────────────────────────────
 async function fetchFromImdbUrl(imdbUrl, fallbackTitle) {
   const imdbId = extractImdbId(imdbUrl);
@@ -642,6 +680,10 @@ function EditModal({ item, onSave, onClose }) {
   const [imdbFetching,  setImdbFetching]  = useState(false);
   const [imdbFetchErr,  setImdbFetchErr]  = useState("");
   const [imdbFetchOk,   setImdbFetchOk]   = useState(false);
+  const [tmdbUrl,       setTmdbUrl]       = useState("");
+  const [tmdbFetching,  setTmdbFetching]  = useState(false);
+  const [tmdbFetchErr,  setTmdbFetchErr]  = useState("");
+  const [tmdbFetchOk,   setTmdbFetchOk]   = useState(false);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -685,6 +727,24 @@ function EditModal({ item, onSave, onClose }) {
       setImdbFetchOk(true);
     } catch (e) { setImdbFetchErr(e.message || "Ophalen mislukt"); }
     finally { setImdbFetching(false); }
+  }
+
+  async function doTmdbFetch() {
+    const id = extractTmdbId(tmdbUrl.trim());
+    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL"); return; }
+    setTmdbFetching(true); setTmdbFetchErr(""); setTmdbFetchOk(false);
+    try {
+      const data = await fetchFromTmdbId(id);
+      setForm(f => ({
+        ...f,
+        year:        data.year        || f.year,
+        genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
+        description: data.description || f.description,
+        imdb_url:    data.imdb_url    || f.imdb_url,
+      }));
+      setTmdbFetchOk("✓ Gevonden: " + (data.title || "onbekend") + (data.year ? " (" + data.year + ")" : ""));
+    } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setTmdbFetching(false); }
   }
 
   function handleSave() {
@@ -762,6 +822,35 @@ function EditModal({ item, onSave, onClose }) {
 
         {/* Editable fields */}
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+
+          {/* TMDB URL lookup */}
+          <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:9, padding:"12px 14px" }}>
+            <div style={{ fontSize:12, fontWeight:600, color:"#1a1a2e", marginBottom:6 }}>
+              🎬 TMDB URL <span style={{ fontWeight:400, color:"#6e6e73" }}>— plak de themoviedb.org URL om gegevens op te halen</span>
+            </div>
+            <div style={{ display:"flex", gap:7, alignItems:"center", flexWrap:"wrap" }}>
+              <input
+                style={{ flex:1, minWidth:200, background:"#fff", border:"1.5px solid #b8d4f0",
+                         borderRadius:7, color:"#1a1a2e", fontFamily:"Inter,sans-serif",
+                         fontSize:13, padding:"8px 11px", outline:"none" }}
+                placeholder="https://www.themoviedb.org/tv/262262-under-salt-marsh"
+                value={tmdbUrl}
+                onChange={e => { setTmdbUrl(e.target.value); setTmdbFetchErr(""); setTmdbFetchOk(false); }}
+                onKeyDown={e => e.key === "Enter" && doTmdbFetch()}
+              />
+              <button onClick={doTmdbFetch} disabled={tmdbFetching || !tmdbUrl}
+                style={{ background: !tmdbUrl ? "#ccc" : tmdbFetching ? "#7bb3e0" : "#0066cc",
+                         border:"none", borderRadius:7, color:"#fff", fontFamily:"Inter,sans-serif",
+                         fontSize:13, fontWeight:600, padding:"8px 16px",
+                         cursor: !tmdbUrl || tmdbFetching ? "not-allowed" : "pointer",
+                         display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen…</> : "🎬 Haal op via TMDB"}
+              </button>
+            </div>
+            {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>⚠️ {tmdbFetchErr}</div>}
+            {tmdbFetchOk  && <div style={{ fontSize:11, color:"#28a745", marginTop:5 }}>{tmdbFetchOk}</div>}
+          </div>
+
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
             {inp("Jaar", "year")}
             {inp("Genres (komma-gescheiden)", "genres")}
