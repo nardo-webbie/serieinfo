@@ -1060,8 +1060,35 @@ function SearchPage({ library, onSave }) {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [imdbUrlOverride, setImdbUrlOverride] = useState("");
-  const [imdbFetching, setImdbFetching] = useState(false);
-  const [imdbFetchErr, setImdbFetchErr] = useState("");
+  const [imdbFetching,   setImdbFetching]   = useState(false);
+  const [imdbFetchErr,   setImdbFetchErr]   = useState("");
+  const [tmdbUrlInput,   setTmdbUrlInput]   = useState("");
+  const [tmdbFetching,   setTmdbFetching]   = useState(false);
+  const [tmdbFetchErr,   setTmdbFetchErr]   = useState("");
+  const [tmdbFetchOk,    setTmdbFetchOk]    = useState("");
+
+  async function fetchFromTmdbUrl() {
+    const id = extractTmdbId(tmdbUrlInput.trim());
+    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL"); return; }
+    setTmdbFetching(true); setTmdbFetchErr(""); setTmdbFetchOk("");
+    try {
+      const data = await fetchFromTmdbId(id);
+      setResult(prev => ({
+        ...(prev || {}),
+        title:             data.title             || prev?.title             || series,
+        year:              data.year              || prev?.year              || null,
+        genres:            data.genres?.length    ? data.genres              : (prev?.genres || []),
+        description:       data.description       || prev?.description       || null,
+        tmdb_rating:       data.tmdb_rating       || prev?.tmdb_rating       || null,
+        imdb_url:          data.imdb_url          || prev?.imdb_url          || null,
+        poster_url:        data.poster_url        || prev?.poster_url        || null,
+        streaming_service: prev?.streaming_service || streaming,
+        streaming_url:     prev?.streaming_url     || null,
+      }));
+      setTmdbFetchOk("✓ " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
+    } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setTmdbFetching(false); }
+  }
 
   async function fetchFromUrl() {
     if (!imdbUrlOverride.trim()) return;
@@ -1116,7 +1143,7 @@ function SearchPage({ library, onSave }) {
         <div className="field">
           <label className="flabel">TV Serie</label>
           <input className="finput" placeholder="bv. Breaking Bad, Succession…" value={series}
-            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); setImdbUrlOverride(""); }}
+            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); setImdbUrlOverride(""); setTmdbUrlInput(""); setTmdbFetchOk(""); setTmdbFetchErr(""); }}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <div className="field">
@@ -1145,6 +1172,34 @@ function SearchPage({ library, onSave }) {
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
               <div className="rbox"><span className="ricon">🎬</span><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
+            </div>
+
+            {/* TMDB URL ophalen */}
+            <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:9, padding:"12px 14px" }}>
+              <div style={{ fontSize:12, fontWeight:600, color:"#1a1a2e", marginBottom:6 }}>
+                🎬 TMDB URL <span style={{ fontWeight:400, color:"#6e6e73" }}>— plak de themoviedb.org URL om gegevens op te halen</span>
+              </div>
+              <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                <input
+                  className="finput"
+                  style={{ flex:1, minWidth:200, fontSize:13, padding:"9px 12px", background:"#fff", borderColor:"#b8d4f0" }}
+                  placeholder="https://www.themoviedb.org/tv/12345-serie-naam"
+                  value={tmdbUrlInput}
+                  onChange={e => { setTmdbUrlInput(e.target.value); setTmdbFetchErr(""); setTmdbFetchOk(""); }}
+                  onKeyDown={e => e.key === "Enter" && fetchFromTmdbUrl()}
+                />
+                {tmdbUrlInput && (
+                  <button onClick={fetchFromTmdbUrl} disabled={tmdbFetching}
+                    style={{ background: tmdbFetching ? "#7bb3e0" : "#0066cc", border:"none", borderRadius:7,
+                             color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                             padding:"9px 16px", cursor: tmdbFetching ? "not-allowed" : "pointer",
+                             display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                    {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen…</> : "🎬 Haal op via TMDB"}
+                  </button>
+                )}
+              </div>
+              {tmdbFetchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:5 }}>⚠️ {tmdbFetchErr}</div>}
+              {tmdbFetchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:5 }}>✓ {tmdbFetchOk}</div>}
             </div>
 
             {/* Bewerkbaar IMDb URL veld met ophalen-knop */}
@@ -1196,7 +1251,8 @@ function SearchPage({ library, onSave }) {
                   guard(() => {
                     onSave({
                       ...result,
-                      imdb_url: imdbUrlOverride || result.imdb_url || null,
+                      imdb_url:    imdbUrlOverride || result.imdb_url    || null,
+                      tmdb_rating: result.tmdb_rating || null,
                       id: "s" + Date.now(),
                       savedAt: new Date().toISOString()
                     });
