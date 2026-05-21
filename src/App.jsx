@@ -508,18 +508,45 @@ function DetailModal({ item, onClose, onDelete }) {
 }
 
 
+// ─── Extract IMDb title ID from URL ──────────────────────────────────────
+function extractImdbId(url) {
+  const m = (url || "").match(/tt\d{7,}/);
+  return m ? m[0] : null;
+}
+
+// ─── Fetch series data using IMDb URL ─────────────────────────────────────
+async function fetchFromImdbUrl(imdbUrl, fallbackTitle) {
+  const imdbId = extractImdbId(imdbUrl);
+  const ref = imdbId
+    ? 'IMDb title ID ' + imdbId + ' (URL: ' + imdbUrl + ')'
+    : 'IMDb URL: ' + imdbUrl;
+
+  const prompt =
+    'You are a TV series expert with knowledge of IMDb data.\n\n' +
+    'Find information for the TV series with ' + ref + '.\n' +
+    (fallbackTitle ? 'Series title hint: "' + fallbackTitle + '"\n' : '') +
+    '\nReturn ONLY a raw JSON object:\n' +
+    '{"title":"official title","year":"YYYY or YYYY-YYYY or null","genres":["string"],' +
+    '"desc":"2-3 sentences English description of the actual plot",' +
+    '"imdb":"X.X/10 or null","imdb_url":"' + (imdbUrl || 'null') + '"}\n\n' +
+    'The imdb_url field must be exactly: ' + (imdbUrl || 'null') + '\n' +
+    'Be precise — use the specific IMDb ID to find the correct series. Start with { end with }.';
+
+  const text = await claude([{ role: "user", content: prompt }], 600);
+  return parseJsonObject(text);
+}
+
 // ─── Single series AI re-search ───────────────────────────────────────────
 async function researchSeries(title, streamingService) {
   const prompt =
     'You are a TV series expert. Find accurate information for the TV series "' + title + '" available on ' + streamingService + '.\n\n' +
-    'Return ONLY a raw JSON object with these exact fields:\n' +
+    'Return ONLY a raw JSON object:\n' +
     '{"year":"YYYY or YYYY-YYYY or null","genres":["string"],' +
     '"desc":"2-3 sentences English description of the actual plot","imdb":"X.X/10 or null",' +
-    '"imdb_url":"https://www.imdb.com/title/... or null","rt":"XX% or null",' +
-    '"rt_url":"https://www.rottentomatoes.com/tv/... or null"}\n\n' +
+    '"imdb_url":"https://www.imdb.com/title/ttXXXXXXX/ or null"}\n\n' +
     'Be accurate. If uncertain about a field return null. Start with { and end with }.';
 
-  const text = await claude([{ role: "user", content: prompt }], 800);
+  const text = await claude([{ role: "user", content: prompt }], 600);
   return parseJsonObject(text);
 }
 
@@ -533,9 +560,12 @@ function EditModal({ item, onSave, onClose }) {
     imdb_rating: item.imdb_rating || "",
     imdb_url:    item.imdb_url    || "",
   });
-  const [searching, setSearching]  = useState(false);
-  const [searchErr, setSearchErr]  = useState("");
-  const [searchOk,  setSearchOk]   = useState(false);
+  const [searching,     setSearching]     = useState(false);
+  const [searchErr,     setSearchErr]     = useState("");
+  const [searchOk,      setSearchOk]      = useState(false);
+  const [imdbFetching,  setImdbFetching]  = useState(false);
+  const [imdbFetchErr,  setImdbFetchErr]  = useState("");
+  const [imdbFetchOk,   setImdbFetchOk]   = useState(false);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -560,6 +590,24 @@ function EditModal({ item, onSave, onClose }) {
     } finally {
       setSearching(false);
     }
+  }
+
+  async function doImdbFetch() {
+    if (!form.imdb_url.trim()) return;
+    setImdbFetching(true); setImdbFetchErr(""); setImdbFetchOk(false);
+    try {
+      const ai = await fetchFromImdbUrl(form.imdb_url.trim(), item.title);
+      setForm(f => ({
+        ...f,
+        year:        ai.year  || f.year,
+        genres:      Array.isArray(ai.genres) && ai.genres.length ? ai.genres.join(", ") : f.genres,
+        description: ai.desc  || f.description,
+        imdb_rating: ai.imdb  || f.imdb_rating,
+        imdb_url:    form.imdb_url.trim(),
+      }));
+      setImdbFetchOk(true);
+    } catch (e) { setImdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setImdbFetching(false); }
   }
 
   function handleSave() {
@@ -658,23 +706,34 @@ function EditModal({ item, onSave, onClose }) {
                               color: form.imdb_url ? "#6e6e73" : "#dc3545", fontWeight:600 }}>
                 IMDb URL{!form.imdb_url && " ⚠ ontbreekt"}
               </label>
-              <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+              <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
                 <input
                   style={{ background: form.imdb_url ? "#f5f5f7" : "#fff8f8",
                            border: "1.5px solid " + (form.imdb_url ? "#e5e5ea" : "#f5a0a8"),
                            borderRadius:8, color:"#1a1a2e", fontFamily:"Inter,sans-serif",
-                           fontSize:13, padding:"9px 12px", outline:"none", flex:1 }}
+                           fontSize:13, padding:"9px 12px", outline:"none", flex:1, minWidth:160 }}
                   placeholder="https://www.imdb.com/title/tt..."
                   value={form.imdb_url}
-                  onChange={e => setForm(f => ({ ...f, imdb_url: e.target.value }))}
+                  onChange={e => { setForm(f => ({ ...f, imdb_url: e.target.value })); setImdbFetchErr(""); setImdbFetchOk(false); }}
+                  onKeyDown={e => e.key === "Enter" && doImdbFetch()}
                 />
                 {form.imdb_url && (
+                  <button onClick={doImdbFetch} disabled={imdbFetching}
+                    style={{ background: imdbFetching ? "#bbb" : "#f5a623", border:"none",
+                             borderRadius:6, color:"#fff", fontFamily:"Inter,sans-serif",
+                             fontSize:12, fontWeight:600, padding:"9px 13px",
+                             cursor: imdbFetching ? "not-allowed" : "pointer",
+                             display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
+                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen…</> : "⭐ Haal op"}
+                  </button>
+                )}
+                {form.imdb_url && (
                   <a href={form.imdb_url} target="_blank" rel="noopener noreferrer"
-                    style={{ fontSize:12, color:"#0066cc", whiteSpace:"nowrap", textDecoration:"none" }}>
-                    ↗
-                  </a>
+                    style={{ fontSize:12, color:"#0066cc", whiteSpace:"nowrap", textDecoration:"none", padding:"9px 4px" }}>↗</a>
                 )}
               </div>
+              {imdbFetchErr && <div style={{ fontSize:11, color:"#c82333" }}>⚠️ {imdbFetchErr}</div>}
+              {imdbFetchOk  && <div style={{ fontSize:11, color:"#28a745" }}>✓ Gegevens opgehaald via IMDb ID</div>}
             </div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -827,6 +886,28 @@ function SearchPage({ library, onSave }) {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [imdbUrlOverride, setImdbUrlOverride] = useState("");
+  const [imdbFetching, setImdbFetching] = useState(false);
+  const [imdbFetchErr, setImdbFetchErr] = useState("");
+
+  async function fetchFromUrl() {
+    if (!imdbUrlOverride.trim()) return;
+    setImdbFetching(true); setImdbFetchErr("");
+    try {
+      const ai = await fetchFromImdbUrl(imdbUrlOverride.trim(), result?.title || series);
+      setResult(prev => ({
+        ...(prev || {}),
+        title:          ai.title       || prev?.title || series,
+        year:           ai.year        || prev?.year  || null,
+        genres:         Array.isArray(ai.genres) && ai.genres.length ? ai.genres : (prev?.genres || []),
+        description:    ai.desc        || prev?.description || null,
+        imdb_rating:    ai.imdb        || prev?.imdb_rating || null,
+        imdb_url:       imdbUrlOverride.trim(),
+        streaming_service: prev?.streaming_service || streaming,
+        streaming_url:  prev?.streaming_url || null,
+      }));
+    } catch (e) { setImdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setImdbFetching(false); }
+  }
 
   const alreadySaved = result ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase()) : false;
 
@@ -892,26 +973,45 @@ function SearchPage({ library, onSave }) {
               <div className="rbox"><span className="ricon">⭐</span><div><div className="rl">IMDb</div><div className={"rv " + (result.imdb_rating ? "imdb" : "none")}>{result.imdb_rating || "N/B"}</div></div></div>
             </div>
 
-            {/* Bewerkbaar IMDb URL veld */}
+            {/* Bewerkbaar IMDb URL veld met ophalen-knop */}
             <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
               <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>
-                IMDb URL {!result.imdb_url && <span style={{ color:"#dc3545", fontWeight:400, letterSpacing:0, textTransform:"none" }}>— niet gevonden, voer handmatig in</span>}
+                IMDb URL
+                {!result.imdb_url && !imdbUrlOverride && (
+                  <span style={{ color:"#dc3545", fontWeight:400, letterSpacing:0, textTransform:"none", marginLeft:6 }}>
+                    — niet gevonden, voer handmatig in
+                  </span>
+                )}
               </label>
-              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
                 <input
                   className="finput"
-                  style={{ flex:1, fontSize:13, padding:"9px 12px" }}
+                  style={{ flex:1, minWidth:200, fontSize:13, padding:"9px 12px",
+                    borderColor: imdbUrlOverride && !imdbUrlOverride.includes("imdb.com") ? "#f5a0a8" : undefined }}
                   placeholder="https://www.imdb.com/title/tt..."
                   value={imdbUrlOverride}
-                  onChange={e => setImdbUrlOverride(e.target.value)}
+                  onChange={e => { setImdbUrlOverride(e.target.value); setImdbFetchErr(""); }}
+                  onKeyDown={e => e.key === "Enter" && fetchFromUrl()}
                 />
                 {imdbUrlOverride && (
+                  <button
+                    onClick={fetchFromUrl}
+                    disabled={imdbFetching}
+                    style={{ background: imdbFetching ? "#bbb" : "#f5a623", border:"none", borderRadius:7,
+                             color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                             padding:"9px 16px", cursor: imdbFetching ? "not-allowed" : "pointer",
+                             display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen…</> : "⭐ Haal gegevens op"}
+                  </button>
+                )}
+                {imdbUrlOverride && !imdbFetching && (
                   <a href={imdbUrlOverride} target="_blank" rel="noopener noreferrer"
-                    className="lb sec" style={{ whiteSpace:"nowrap", flexShrink:0 }}>
+                    className="lb sec" style={{ whiteSpace:"nowrap", flexShrink:0, padding:"9px 14px" }}>
                     Bekijk ↗
                   </a>
                 )}
               </div>
+              {imdbFetchErr && <div style={{ fontSize:12, color:"#c82333" }}>⚠️ {imdbFetchErr}</div>}
             </div>
 
             <div className="rlinks">
