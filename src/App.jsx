@@ -39,6 +39,76 @@ const saveLib = (items) => {
   try { localStorage.setItem(LIB_KEY, JSON.stringify(items)); } catch {}
 };
 
+// ─── TMDB API ─────────────────────────────────────────────────────────────
+const TMDB_KEY_LS = "serieinfo-tmdb";
+const getTmdbKey = () => { try { return localStorage.getItem(TMDB_KEY_LS) || ""; } catch { return ""; } };
+const setTmdbKey = (k) => { try { localStorage.setItem(TMDB_KEY_LS, k); } catch {} };
+
+async function tmdbSearch(title) {
+  const key = getTmdbKey();
+  if (!key) return null;
+
+  // 1. Search
+  const s = await fetch(
+    "https://api.themoviedb.org/3/search/tv?query=" + encodeURIComponent(title) +
+    "&language=en-US&page=1",
+    { headers: { Authorization: "Bearer " + key, accept: "application/json" } }
+  );
+  const sd = await s.json();
+  if (!sd.results?.length) return null;
+
+  const show = sd.results[0];
+  const id   = show.id;
+
+  // 2. Details + external IDs in parallel
+  const [det, ext] = await Promise.all([
+    fetch("https://api.themoviedb.org/3/tv/" + id + "?language=en-US",
+      { headers: { Authorization: "Bearer " + key, accept: "application/json" } }).then(r => r.json()),
+    fetch("https://api.themoviedb.org/3/tv/" + id + "/external_ids",
+      { headers: { Authorization: "Bearer " + key, accept: "application/json" } }).then(r => r.json()),
+  ]);
+
+  const imdbId  = ext.imdb_id || null;
+  const year    = show.first_air_date ? show.first_air_date.slice(0, 4) : null;
+  const endYear = det.last_air_date   ? det.last_air_date.slice(0, 4)   : null;
+  const yearStr = year && endYear && endYear !== year ? year + "–" + endYear : year;
+
+  return {
+    title:       det.name || show.name,
+    year:        yearStr,
+    genres:      (det.genres || []).map(g => g.name),
+    description: show.overview || det.overview || null,
+    imdb_rating: null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
+  };
+}
+
+// ─── Enrich one series: TMDB first, Claude as fallback ────────────────────
+async function enrichOne(title, streamingService) {
+  // Try TMDB
+  try {
+    const t = await tmdbSearch(title);
+    if (t && (t.description || t.year || t.genres.length)) return { ...t, source: "tmdb" };
+  } catch (_) {}
+
+  // Fallback: Claude AI
+  const text = await claude(
+    [{ role: "user", content:
+      'TV series "' + title + '" on ' + streamingService + '. Return JSON only:\n' +
+      '{"year":"YYYY or null","genres":["str"],"desc":"2-3 sentences English","imdb":"X.X/10 or null","imdb_url":"url or null"}'
+    }],
+    400,
+    "Return only a raw JSON object. No markdown."
+  );
+  const ai = parseJsonObject(text);
+  return {
+    title, year: ai.year || null, genres: ai.genres || [],
+    description: ai.desc || null, imdb_rating: ai.imdb || null,
+    imdb_url: ai.imdb_url || null, poster_url: null, source: "claude",
+  };
+}
+
 // ─── Service kleuren ──────────────────────────────────────────────────────
 const SVC_COLORS = {
   netflix: "#e50914", "apple tv": "#1c1c1e", max: "#002be0", hbo: "#002be0",
@@ -582,15 +652,16 @@ function EditModal({ item, onSave, onClose }) {
   async function doResearch() {
     setSearching(true); setSearchErr(""); setSearchOk(false);
     try {
-      const ai = await researchSeries(item.title, item.streaming_service);
+      const data = await enrichOne(item.title, item.streaming_service);
       setForm(f => ({
-        year:        ai.year || f.year,
-        genres:      Array.isArray(ai.genres) && ai.genres.length ? ai.genres.join(", ") : f.genres,
-        description: ai.desc || f.description,
-        imdb_rating: ai.imdb || f.imdb_rating,
-        imdb_url:    (typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http")) ? ai.imdb_url : f.imdb_url,
+        year:        data.year        || f.year,
+        genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
+        description: data.description || f.description,
+        imdb_rating: data.imdb_rating || f.imdb_rating,
+        imdb_url:    data.imdb_url    || f.imdb_url,
       }));
-      setSearchOk(true);
+      const src = data.source === "tmdb" ? "✓ Gevonden via TMDB" : "✓ Gevonden via AI";
+      setSearchOk(src);
     } catch (e) {
       setSearchErr(e.message || "Zoeken mislukt");
     } finally {
@@ -675,7 +746,7 @@ function EditModal({ item, onSave, onClose }) {
               Haal automatisch nieuwe gegevens op voor deze serie
             </div>
             {searchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:4 }}>⚠️ {searchErr}</div>}
-            {searchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:4 }}>✓ Gegevens bijgewerkt</div>}
+            {searchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:4 }}>{searchOk}</div>}
           </div>
           <button
             onClick={doResearch}
@@ -1050,22 +1121,29 @@ function SearchPage({ library, onSave }) {
 
 // ─── Import ────────────────────────────────────────────────────────────────
 function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
-  const [phase, setPhase] = useState("idle");
+  const [phase,      setPhase]      = useState("idle");
   const [savedCount, setSavedCount] = useState(0);
-  const [enriched, setEnriched] = useState(0);
-  const [bstates, setBstates] = useState(BATCHES.map(() => "pending"));
-  const [errors, setErrors] = useState([]);
+  const [enriched,   setEnriched]   = useState(0);
+  const [current,    setCurrent]    = useState("");   // title currently being processed
+  const [errors,     setErrors]     = useState([]);
+  const [tmdbKey,    setTmdbKeyState] = useState(getTmdbKey);
   const running = useRef(false);
   const pct = phase === "step2" ? Math.round((enriched / IMPORT_LIST.length) * 100) : phase === "done" ? 100 : 0;
 
+  function saveTmdbKey(k) { setTmdbKey(k); setTmdbKeyState(k); }
+
   async function start() {
     running.current = true;
-    setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0);
-    setBstates(BATCHES.map(() => "pending"));
+    setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0); setCurrent("");
 
     const existingTitles = new Set(currentLibrary.map(e => (e.title || "").toLowerCase()));
     const basic = IMPORT_LIST.filter(s => !existingTitles.has(s.title.toLowerCase()))
-      .map((s, i) => ({ id: "imp" + Date.now() + i, title: s.title, streaming_service: s.streaming_service, streaming_url: s.streaming_url, genres: [], year: null, description: null, imdb_rating: null, imdb_url: null, rt_rating: null, rt_url: null, savedAt: new Date().toISOString(), enriched: false }));
+      .map((s, i) => ({
+        id: "imp" + Date.now() + i, title: s.title,
+        streaming_service: s.streaming_service, streaming_url: s.streaming_url,
+        genres: [], year: null, description: null, imdb_rating: null, imdb_url: null,
+        rt_rating: null, rt_url: null, savedAt: new Date().toISOString(), enriched: false,
+      }));
 
     const merged = [...basic, ...currentLibrary];
     setSavedCount(basic.length);
@@ -1073,34 +1151,45 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
     setPhase("step2");
 
     let working = [...merged];
-    for (let bi = 0; bi < BATCHES.length; bi++) {
+
+    // Process each series individually — TMDB first, Claude as fallback
+    const toEnrich = IMPORT_LIST.filter(s => {
+      const found = working.find(w => w.title.toLowerCase() === s.title.toLowerCase());
+      return found && !found.enriched;
+    });
+
+    for (const series of toEnrich) {
       if (!running.current) break;
-      setBstates(p => p.map((s, idx) => idx === bi ? "running" : s));
-      const batchSeries = BATCHES[bi].filter(s => { const f = working.find(w => w.title.toLowerCase() === s.title.toLowerCase()); return f && !f.enriched; });
-      if (!batchSeries.length) { setBstates(p => p.map((s, idx) => idx === bi ? "done" : s)); continue; }
+      setCurrent(series.title);
       try {
-        const list = batchSeries.map((s, i) => (i + 1) + '. "' + s.title + '" — streaming on ' + s.streaming_service).join("\n");
-        const prompt = "You are a TV series database expert. Return accurate information for these " + batchSeries.length + " TV series as a JSON array.\n\nSeries:\n" + list + "\n\nFor each series return an object with these exact keys:\n- year: release year like \"2021\" or year range \"2019-2023\" or null\n- genres: array of genre strings (e.g. [\"Drama\", \"Thriller\"])\n- desc: 2-3 sentence English description of the actual plot/premise. Be accurate — if unsure, keep it brief and factual.\n- imdb: IMDb rating like \"8.2/10\" or null if unknown\n- imdb_url: full IMDb series URL or null\nIMPORTANT: Match the exact series on the specified platform. If you are not sure about a series, return null for uncertain fields rather than guessing.\n\nReturn ONLY the raw JSON array. Start with [ and end with ].";
-        const text = await claude([{ role: "user", content: prompt }], 4000, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
-        const aiResults = parseJsonArray(text);
-        aiResults.forEach((ai, i) => {
-          if (!ai) return;
-          const orig = batchSeries[i]; if (!orig) return;
-          const idx = working.findIndex(w => w.title.toLowerCase() === orig.title.toLowerCase());
-          if (idx === -1) return;
-          working[idx] = { ...working[idx], year: ai.year || working[idx].year, genres: Array.isArray(ai.genres) && ai.genres.length ? ai.genres : working[idx].genres, description: ai.desc || working[idx].description, imdb_rating: ai.imdb || working[idx].imdb_rating, imdb_url: typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http") ? ai.imdb_url : working[idx].imdb_url, rt_rating: null, rt_url: null, enriched: true };
-        });
-        setEnriched(n => n + batchSeries.length);
-        saveLib(working); onLibraryUpdate([...working]);
-        setBstates(p => p.map((s, idx) => idx === bi ? "done" : s));
+        const data = await enrichOne(series.title, series.streaming_service);
+        const idx = working.findIndex(w => w.title.toLowerCase() === series.title.toLowerCase());
+        if (idx !== -1) {
+          working[idx] = {
+            ...working[idx],
+            title:       data.title       || working[idx].title,
+            year:        data.year        || working[idx].year,
+            genres:      data.genres?.length ? data.genres : working[idx].genres,
+            description: data.description || working[idx].description,
+            imdb_rating: data.imdb_rating || working[idx].imdb_rating,
+            imdb_url:    data.imdb_url    || working[idx].imdb_url,
+            poster_url:  data.poster_url  || working[idx].poster_url,
+            enriched: true,
+          };
+        }
       } catch (err) {
-        const preview = batchSeries.slice(0, 2).map(s => s.title).join(", ");
-        setErrors(p => [...p, "Batch " + (bi + 1) + " (" + preview + "…): " + err.message]);
-        setBstates(p => p.map((s, idx) => idx === bi ? "error" : s));
+        setErrors(p => [...p, series.title + ": " + err.message]);
       }
-      if (bi < BATCHES.length - 1) await new Promise(r => setTimeout(r, 1200));
+      setEnriched(n => n + 1);
+      // Save every 5 series so progress is preserved
+      if ((toEnrich.indexOf(series) + 1) % 5 === 0) {
+        saveLib(working); onLibraryUpdate([...working]);
+      }
+      await new Promise(r => setTimeout(r, 300)); // small delay between requests
     }
-    running.current = false; setPhase("done");
+
+    saveLib(working); onLibraryUpdate([...working]);
+    running.current = false; setCurrent(""); setPhase("done");
   }
 
   return (
@@ -1109,31 +1198,89 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
         <p className="eyebrow">Bulk Import · {IMPORT_LIST.length} series</p>
         <h1 className="big-title">SERIE<em>IMPORT</em></h1>
         <p style={{ fontSize: 14, color: "#6e6e73", marginBottom: 20, marginTop: 7, lineHeight: 1.6 }}>Stap 1: alle series direct opslaan. Stap 2: AI verrijkt met genre, omschrijving en ratings.</p>
+        {/* TMDB key invoer */}
+        <div className="imp-card" style={{ marginBottom: 14 }}>
+          <div style={{ display:"flex", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
+            <div style={{ flex:1, minWidth:240 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:"#1a1a2e", marginBottom:4 }}>
+                🎬 TMDB API-sleutel
+                {tmdbKey && <span style={{ color:"#28a745", marginLeft:8, fontWeight:400 }}>✓ Ingesteld</span>}
+              </div>
+              <div style={{ fontSize:12, color:"#6e6e73", marginBottom:8, lineHeight:1.5 }}>
+                Gratis sleutel via <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style={{ color:"#0066cc" }}>themoviedb.org</a> → Settings → API → Read Access Token.<br />
+                Met TMDB worden vrijwel alle series gevonden. Zonder TMDB gebruikt de app alleen AI als fallback.
+              </div>
+              <input
+                className="finput"
+                style={{ fontSize:12, padding:"8px 12px" }}
+                type="password"
+                placeholder="eyJhbGciOiJIUzI1NiJ9..."
+                defaultValue={tmdbKey}
+                onBlur={e => saveTmdbKey(e.target.value.trim())}
+                onKeyDown={e => e.key === "Enter" && saveTmdbKey(e.target.value.trim())}
+              />
+            </div>
+          </div>
+        </div>
+
         {phase === "idle" && (
           <div className="imp-card">
             <p style={{ fontSize: 13, color: "#6e6e73", lineHeight: 1.7, marginBottom: 14 }}>
-              <strong>{IMPORT_LIST.length} series</strong> · {BATCHES.length} batches van 5.<br />
-              Bibliotheek is direct zichtbaar na stap 1.
+              <strong>{IMPORT_LIST.length} series</strong> worden één voor één opgezocht.<br />
+              {tmdbKey ? "✓ TMDB actief — hoge nauwkeurigheid." : "⚠ Geen TMDB-sleutel — alleen AI als fallback."}<br />
+              Bibliotheek is direct zichtbaar, verrijking loopt op de achtergrond.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <button className="btn-red" onClick={start}>▶ Start import</button>
               <button className="btn-ghost" onClick={() => {
-                if (window.confirm("Weet je zeker dat je alle AI-gegevens wilt verwijderen en opnieuw wilt importeren? De serietitels en streamingdiensten blijven bewaard.")) {
+                if (window.confirm("Alle AI-gegevens verwijderen en opnieuw importeren? Titels en streamingdiensten blijven bewaard.")) {
                   onResetLibrary();
                 }
-              }}>
-                ↺ Reset alle gegevens &amp; herstart
+              }}>↺ Reset &amp; herstart</button>
+            </div>
+          </div>
+        )}
+
+        {(phase === "step1" || phase === "step2") && (
+          <div className="imp-card">
+            {phase === "step1" && (
+              <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                <span className="spin" />
+                <span style={{ fontSize:14, color:"#6e6e73" }}>Basisdata opslaan…</span>
+              </div>
+            )}
+            {phase === "step2" && (
+              <>
+                <div className="prog-row">
+                  <div className="prog-lbl"><span className="spin" />Verrijken via TMDB + AI</div>
+                  <div className="prog-n">{pct}%</div>
+                </div>
+                <div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div>
+                <div className="prog-sub">
+                  {enriched} van {IMPORT_LIST.length} verwerkt
+                  {current && <span style={{ marginLeft:8, color:"#aaa" }}>· {current}</span>}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="done-card">
+            <div className="done-ico">✓</div>
+            <div className="done-title">{savedCount} SERIES OPGESLAGEN</div>
+            <div className="done-sub">
+              {enriched} series verwerkt.
+              {errors.length > 0 && " · " + errors.length + " serie(s) deels mislukt."}
+              <br />Open de <strong style={{ color:"#28a745" }}>Bibliotheek</strong>.
+            </div>
+            <div style={{ marginTop:14 }}>
+              <button className="btn-ghost" onClick={() => { setPhase("idle"); setEnriched(0); setSavedCount(0); setErrors([]); setCurrent(""); }}>
+                Opnieuw importeren
               </button>
             </div>
           </div>
         )}
-        {(phase === "step1" || phase === "step2") && (
-          <div className="imp-card">
-            {phase === "step1" && <div style={{ display: "flex", alignItems: "center", gap: 9 }}><span className="spin" /><span style={{ fontSize: 14, color: "#6e6e73" }}>Basisdata opslaan…</span></div>}
-            {phase === "step2" && <><div className="prog-row"><div className="prog-lbl"><span className="spin" />AI verrijking</div><div className="prog-n">{pct}%</div></div><div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div><div className="prog-sub">{enriched} van {IMPORT_LIST.length} verrijkt</div><div className="brow">{BATCHES.map((_, i) => <div key={i} className={"bp " + (bstates[i] || "pending")}>{bstates[i] === "running" && <span className="spin" style={{ width: 9, height: 9, marginRight: 0 }} />}{bstates[i] === "done" && "✓ "}{bstates[i] === "error" && "✕ "}B{i + 1}</div>)}</div></>}
-          </div>
-        )}
-        {phase === "done" && <div className="done-card"><div className="done-ico">✓</div><div className="done-title">{savedCount} SERIES OPGESLAGEN</div><div className="done-sub">{enriched} verrijkt met AI.{errors.length > 0 && " · " + errors.length + " batch(es) deels mislukt."}<br />Open de <strong style={{ color: "#28a745" }}>Bibliotheek</strong>.</div><div style={{ marginTop: 14 }}><button className="btn-ghost" onClick={() => { setPhase("idle"); setEnriched(0); setSavedCount(0); setErrors([]); setBstates(BATCHES.map(() => "pending")); }}>Opnieuw importeren</button></div></div>}
         {errors.length > 0 && <div className="errs">{errors.map((e, i) => <div key={i} className="ei">{e}</div>)}</div>}
       </div>
     </div>
