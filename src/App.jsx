@@ -73,12 +73,14 @@ async function tmdbSearch(title) {
   const endYear = det.last_air_date   ? det.last_air_date.slice(0, 4)   : null;
   const yearStr = year && endYear && endYear !== year ? year + "–" + endYear : year;
 
+  const voteAvg = det.vote_average || show.vote_average || null;
   return {
     title:       det.name || show.name,
     year:        yearStr,
     genres:      (det.genres || []).map(g => g.name),
     description: show.overview || det.overview || null,
     imdb_rating: null,
+    tmdb_rating: voteAvg ? voteAvg.toFixed(1) + "/10" : null,
     imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
     poster_url:  show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
   };
@@ -104,7 +106,7 @@ async function enrichOne(title, streamingService) {
   const ai = parseJsonObject(text);
   return {
     title, year: ai.year || null, genres: ai.genres || [],
-    description: ai.desc || null, imdb_rating: ai.imdb || null,
+    description: ai.desc || null, imdb_rating: null, tmdb_rating: null,
     imdb_url: ai.imdb_url || null, poster_url: null, source: "claude",
   };
 }
@@ -312,7 +314,7 @@ body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif;
 .ricon { font-size: 22px; line-height: 1; }
 .rl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #aaa; margin-bottom: 2px; font-weight: 600; }
 .rv { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: .04em; line-height: 1; }
-.rv.imdb { color: #f5a623; } .rv.rt { color: #fa320a; } .rv.none { color: #ccc; font-size: 15px; }
+.rv.tmdb { color: #0066cc; } .rv.rt { color: #fa320a; } .rv.none { color: #ccc; font-size: 15px; }
 .rlinks { display: flex; gap: 8px; flex-wrap: wrap; }
 .lb { display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; font-size: 13px; font-weight: 500; padding: 8px 14px; text-decoration: none; transition: all .15s; cursor: pointer; border: none; }
 .lb:hover { opacity: .85; }
@@ -553,7 +555,7 @@ function DetailModal({ item, onClose, onDelete }) {
           </div>
           {item.description && <p className="rdesc">{item.description}</p>}
           <div className="rratings">
-            <div className="rbox"><span className="ricon">⭐</span><div><div className="rl">IMDb</div><div className={"rv " + (item.imdb_rating ? "imdb" : "none")}>{item.imdb_rating || "N/B"}</div></div></div>
+            <div className="rbox"><span className="ricon">🎬</span><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
               {/* RT verwijderd */}
           </div>
           <div className="rlinks">
@@ -608,12 +610,14 @@ async function fetchFromTmdbId(tmdbId) {
   const yearStr = year && endYear && endYear !== year ? year + "–" + endYear : year;
   const imdbId  = ext.imdb_id || null;
 
+  const voteAvg = det.vote_average || null;
   return {
     title:       det.name || null,
     year:        yearStr,
     genres:      (det.genres || []).map(g => g.name),
     description: det.overview || null,
     imdb_rating: null,
+    tmdb_rating: voteAvg ? voteAvg.toFixed(1) + "/10" : null,
     imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
     poster_url:  det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
     source:      "tmdb",
@@ -672,6 +676,7 @@ function EditModal({ item, onSave, onClose }) {
     genres:      (item.genres || []).join(", "),
     description: item.description || "",
     imdb_rating: item.imdb_rating || "",
+    tmdb_rating: item.tmdb_rating || "",
     imdb_url:    item.imdb_url    || "",
   });
   const [searching,     setSearching]     = useState(false);
@@ -696,10 +701,11 @@ function EditModal({ item, onSave, onClose }) {
     try {
       const data = await enrichOne(item.title, item.streaming_service);
       setForm(f => ({
+        ...f,
         year:        data.year        || f.year,
         genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
         description: data.description || f.description,
-        imdb_rating: data.imdb_rating || f.imdb_rating,
+        tmdb_rating: data.tmdb_rating || f.tmdb_rating,
         imdb_url:    data.imdb_url    || f.imdb_url,
       }));
       const src = data.source === "tmdb" ? "✓ Gevonden via TMDB" : "✓ Gevonden via AI";
@@ -741,6 +747,7 @@ function EditModal({ item, onSave, onClose }) {
         genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
         description: data.description || f.description,
         imdb_url:    data.imdb_url    || f.imdb_url,
+        tmdb_rating: data.tmdb_rating || f.tmdb_rating,
       }));
       setTmdbFetchOk("✓ Gevonden: " + (data.title || "onbekend") + (data.year ? " (" + data.year + ")" : ""));
     } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
@@ -756,6 +763,7 @@ function EditModal({ item, onSave, onClose }) {
         description: form.description || null,
         imdb_rating: form.imdb_rating || null,
         imdb_url:    form.imdb_url    || null,
+        tmdb_rating: form.tmdb_rating || null,
         enriched:    true,
       });
       onClose();
@@ -866,7 +874,7 @@ function EditModal({ item, onSave, onClose }) {
             />
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            {inp("IMDb score (bv. 8.2/10)", "imdb_rating")}
+            {inp("TMDB score (bv. 7.4/10)", "tmdb_rating")}
             <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
               <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase",
                               color: form.imdb_url ? "#6e6e73" : "#dc3545", fontWeight:600 }}>
@@ -946,7 +954,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
       && (!hideWatched || !item.watched);
   });
   if (sort === "az") list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-  if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.imdb_rating) || 0) - (parseFloat(a.imdb_rating) || 0));
+  if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.tmdb_rating) || 0) - (parseFloat(a.tmdb_rating) || 0));
 
   return (
     <div className="page">
@@ -963,7 +971,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
         <div className="controls">
           <input className="si" placeholder="Zoek naam, genre of omschrijving…" value={q} onChange={e => setQ(e.target.value)} />
           {svcs.map(s => <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>)}
-          {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "IMDb"]].map(([v, l]) =>
+          {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "TMDB ↓"]].map(([v, l]) =>
             <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>)}
           <button
             className={"fb watched-filter " + (hideWatched ? "on" : "")}
@@ -1024,7 +1032,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
                       <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>✎</button>
                     </div>
                     <div className="lrow-btns">
-                      {!isEnriching && <>{item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}</>}
+                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>🎬 {item.tmdb_rating}</span>}</>}
                       {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>▶ Bekijk</a>}
                     </div>
                   </div>
@@ -1136,7 +1144,7 @@ function SearchPage({ library, onSave }) {
             </div>
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
-              <div className="rbox"><span className="ricon">⭐</span><div><div className="rl">IMDb</div><div className={"rv " + (result.imdb_rating ? "imdb" : "none")}>{result.imdb_rating || "N/B"}</div></div></div>
+              <div className="rbox"><span className="ricon">🎬</span><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
             </div>
 
             {/* Bewerkbaar IMDb URL veld met ophalen-knop */}
@@ -1261,6 +1269,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
             genres:      data.genres?.length ? data.genres : working[idx].genres,
             description: data.description || working[idx].description,
             imdb_rating: data.imdb_rating || working[idx].imdb_rating,
+            tmdb_rating: data.tmdb_rating || working[idx].tmdb_rating || null,
             imdb_url:    data.imdb_url    || working[idx].imdb_url,
             poster_url:  data.poster_url  || working[idx].poster_url,
             enriched: true,
