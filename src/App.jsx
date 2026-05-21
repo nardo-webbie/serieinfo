@@ -653,7 +653,29 @@ function EditModal({ item, onSave, onClose }) {
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
             {inp("IMDb score (bv. 8.2/10)", "imdb_rating")}
-            {inp("IMDb URL", "imdb_url")}
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase",
+                              color: form.imdb_url ? "#6e6e73" : "#dc3545", fontWeight:600 }}>
+                IMDb URL{!form.imdb_url && " ⚠ ontbreekt"}
+              </label>
+              <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                <input
+                  style={{ background: form.imdb_url ? "#f5f5f7" : "#fff8f8",
+                           border: "1.5px solid " + (form.imdb_url ? "#e5e5ea" : "#f5a0a8"),
+                           borderRadius:8, color:"#1a1a2e", fontFamily:"Inter,sans-serif",
+                           fontSize:13, padding:"9px 12px", outline:"none", flex:1 }}
+                  placeholder="https://www.imdb.com/title/tt..."
+                  value={form.imdb_url}
+                  onChange={e => setForm(f => ({ ...f, imdb_url: e.target.value }))}
+                />
+                {form.imdb_url && (
+                  <a href={form.imdb_url} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize:12, color:"#0066cc", whiteSpace:"nowrap", textDecoration:"none" }}>
+                    ↗
+                  </a>
+                )}
+              </div>
+            </div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
           </div>
@@ -804,6 +826,7 @@ function SearchPage({ library, onSave }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [imdbUrlOverride, setImdbUrlOverride] = useState("");
 
   const alreadySaved = result ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase()) : false;
 
@@ -819,7 +842,9 @@ function SearchPage({ library, onSave }) {
         '"imdb_url":"full IMDb URL or null",' +
         '"streaming_service":"string","streaming_url":"url of null"}';
       const text = await claude([{ role: "user", content: prompt }], 900);
-      setResult(parseJsonObject(text));
+      const parsed = parseJsonObject(text);
+      setResult(parsed);
+      setImdbUrlOverride(parsed.imdb_url || "");
       setStatus("");
     } catch (e) { setError(e.message || "Probeer opnieuw."); setStatus(""); }
     finally { setLoading(false); }
@@ -836,7 +861,7 @@ function SearchPage({ library, onSave }) {
         <div className="field">
           <label className="flabel">TV Serie</label>
           <input className="finput" placeholder="bv. Breaking Bad, Succession…" value={series}
-            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); }}
+            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); setImdbUrlOverride(""); }}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <div className="field">
@@ -865,14 +890,45 @@ function SearchPage({ library, onSave }) {
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
               <div className="rbox"><span className="ricon">⭐</span><div><div className="rl">IMDb</div><div className={"rv " + (result.imdb_rating ? "imdb" : "none")}>{result.imdb_rating || "N/B"}</div></div></div>
-              {/* RT verwijderd */}
             </div>
+
+            {/* Bewerkbaar IMDb URL veld */}
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>
+                IMDb URL {!result.imdb_url && <span style={{ color:"#dc3545", fontWeight:400, letterSpacing:0, textTransform:"none" }}>— niet gevonden, voer handmatig in</span>}
+              </label>
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                <input
+                  className="finput"
+                  style={{ flex:1, fontSize:13, padding:"9px 12px" }}
+                  placeholder="https://www.imdb.com/title/tt..."
+                  value={imdbUrlOverride}
+                  onChange={e => setImdbUrlOverride(e.target.value)}
+                />
+                {imdbUrlOverride && (
+                  <a href={imdbUrlOverride} target="_blank" rel="noopener noreferrer"
+                    className="lb sec" style={{ whiteSpace:"nowrap", flexShrink:0 }}>
+                    Bekijk ↗
+                  </a>
+                )}
+              </div>
+            </div>
+
             <div className="rlinks">
               {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {result.streaming_service}</a>}
-              {result.imdb_url && <a href={result.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
-              {/* RT link verwijderd */}
               <button className={"lb " + (saved || alreadySaved ? "saved" : "save")}
-                onClick={() => { if (alreadySaved) return; guard(() => { onSave({ ...result, id: "s" + Date.now(), savedAt: new Date().toISOString() }); setSaved(true); }); }}
+                onClick={() => {
+                  if (alreadySaved) return;
+                  guard(() => {
+                    onSave({
+                      ...result,
+                      imdb_url: imdbUrlOverride || result.imdb_url || null,
+                      id: "s" + Date.now(),
+                      savedAt: new Date().toISOString()
+                    });
+                    setSaved(true);
+                  });
+                }}
                 disabled={saved || alreadySaved}>
                 {saved || alreadySaved ? "✓ Opgeslagen" : "+ Opslaan in bibliotheek"}
               </button>
