@@ -374,7 +374,7 @@ function DetailModal({ item, onClose, onDelete }) {
               {/* RT verwijderd */}
           </div>
           <div className="rlinks">
-            {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">> Bekijk op {item.streaming_service}</a>}
+            {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">Bekijk op {item.streaming_service}</a>}
             {item.imdb_url && <a href={item.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
               {/* RT link verwijderd */}
             <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => guard(() => { onDelete(item.id); onClose(); })}>[del] Verwijder</button>
@@ -848,7 +848,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
                     </div>
                     <div className="lrow-btns">
                       {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>[film] {item.tmdb_rating}</span>}</>}
-                      {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>> Bekijk</a>}
+                      {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>Bekijk</a>}
                     </div>
                   </div>
                 </div>
@@ -1068,7 +1068,7 @@ function SearchPage({ library, onSave }) {
             </div>
 
             <div className="rlinks">
-              {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">> Bekijk op {result.streaming_service}</a>}
+              {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">Bekijk op {result.streaming_service}</a>}
               <button className={"lb " + (saved || alreadySaved ? "saved" : "save")}
                 onClick={handleSaveToLibrary}
                 disabled={saved || alreadySaved}>
@@ -1204,7 +1204,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
               Bibliotheek is direct zichtbaar, verrijking loopt op de achtergrond.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <button className="btn-primary" onClick={start}>> Start import</button>
+              <button className="btn-primary" onClick={start}>Start import</button>
               <button className="btn-secondary" onClick={handleReset}>Reset herstart</button>
             </div>
           </div>
