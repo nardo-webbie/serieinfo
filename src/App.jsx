@@ -292,7 +292,7 @@ function PinSetup({ onDone, onCancel }) {
           onKeyDown={e => e.key === "Enter" && submit()} />
         {err && <div className="pin-err">{err}</div>}
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-primary" style={{ flex: 1 }} onClick={submit}>{step === 1 ? "Volgende ->" : "Opslaan"}</button>
+          <button className="btn-primary" style={{ flex: 1 }} onClick={submit}>{step === 1 ? "Volgende" : "Opslaan"}</button>
           <button className="btn-secondary" onClick={onCancel}>Annuleer</button>
         </div>
       </div>
@@ -1181,7 +1181,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
                 {tmdbKey && <span style={{ color:"#28a745", marginLeft:8, fontWeight:400 }}>v Ingesteld</span>}
               </div>
               <div style={{ fontSize:12, color:"#6e6e73", marginBottom:8, lineHeight:1.5 }}>
-                Gratis sleutel via <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style={{ color:"#0066cc" }}>themoviedb.org</a> -> Settings -> API -> Read Access Token.<br />
+                Gratis sleutel via <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style={{ color:"#0066cc" }}>themoviedb.org</a>, Settings, API, Read Access Token.<br />
                 Met TMDB worden vrijwel alle series gevonden. Zonder TMDB gebruikt de app alleen AI als fallback.
               </div>
               <input
