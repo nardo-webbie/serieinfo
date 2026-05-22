@@ -331,7 +331,7 @@ function PinVerify({ pin, onSuccess, onCancel }) {
           {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} className="pin-btn" onClick={() => press(String(n))}>{n}</button>)}
           <div />
           <button className="pin-btn" onClick={() => press("0")}>0</button>
-          <button className="pin-btn" onClick={() => setInput(i => i.slice(0,-1))}><</button>
+          <button className="pin-btn" onClick={() => setInput(i => i.slice(0,-1))}>Del</button>
         </div>
         {err && <div className="pin-err">Onjuiste pincode, probeer opnieuw.</div>}
         <button className="pin-clear" onClick={onCancel}>Annuleer</button>
