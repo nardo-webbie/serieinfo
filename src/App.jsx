@@ -165,7 +165,7 @@ const IMPORT_LIST = [
   ["Deadloch","Prime Video","https://www.primevideo.com"],
   ["Vaka","Prime Video","https://www.primevideo.com"],
   ["The Night Agent","Netflix","https://www.netflix.com"],
-  ["This Town","Max","https://www.max.com"],
+  ["This Town","NPO","https://www.npo.nl"],
   ["How to Get to Heaven from Belfast","Netflix","https://www.netflix.com"],
   ["His & Hers","Netflix","https://www.netflix.com"],
   ["Black Snow","Netflix","https://www.netflix.com"],
@@ -229,8 +229,6 @@ const BATCHES = chunk(IMPORT_LIST, 5);
 
 // ─── CSS ──────────────────────────────────────────────────────────────────
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
-
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
 body {
@@ -1843,7 +1841,17 @@ export default function App() {
   const [library, setLibrary] = useState([]);
   const [enrichingIds, setEnrichingIds] = useState(new Set());
 
-  useEffect(() => { setLibrary(loadLib()); }, []);
+  useEffect(() => {
+    // Inject Google Fonts (avoids @import inside JS template literal which breaks Vite)
+    if (!document.getElementById("gfonts")) {
+      const link = document.createElement("link");
+      link.id   = "gfonts";
+      link.rel  = "stylesheet";
+      link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap";
+      document.head.appendChild(link);
+    }
+    setLibrary(loadLib());
+  }, []);
 
   function updateLibrary(items) {
     setLibrary([...items]);
@@ -1870,7 +1878,7 @@ export default function App() {
   return (
     <>
       <style>{CSS}</style>
-      <div style={{ minHeight: "100vh", background: "#f5f5f7" }}>
+      <div style={{ minHeight: "100vh", background: "#f8f7f5" }}>
         <nav className="nav">
           <div className="logo" onClick={() => setPage("search")}><span className="logo-dot"></span>Serie<em>Info</em></div>
           <div className="tabs">
