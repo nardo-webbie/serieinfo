@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import "./App.css";
 
-// ─── API via Vercel proxy (geen directe Anthropic calls) ──────────────────
+// --- API via Vercel proxy (geen directe Anthropic calls) ------------------
 async function claude(messages, maxTokens = 1000, system = null) {
   const body = { model: "claude-haiku-4-5-20251001", max_tokens: maxTokens, messages };
   if (system) body.system = system;
@@ -12,7 +12,7 @@ async function claude(messages, maxTokens = 1000, system = null) {
     body: JSON.stringify(body),
   });
 
-  // Lees ruwe tekst eerst — voorkomt crash als het geen JSON is
+  // Lees ruwe tekst eerst  -  voorkomt crash als het geen JSON is
   const raw = await res.text();
   let data;
   try {
@@ -30,7 +30,7 @@ async function claude(messages, maxTokens = 1000, system = null) {
   return text;
 }
 
-// ─── Library (localStorage) ───────────────────────────────────────────────
+// --- Library (localStorage) -----------------------------------------------
 const LIB_KEY = "serieinfo-lib";
 const loadLib = () => {
   try { const v = localStorage.getItem(LIB_KEY); return v ? JSON.parse(v) : []; }
@@ -40,7 +40,7 @@ const saveLib = (items) => {
   try { localStorage.setItem(LIB_KEY, JSON.stringify(items)); } catch {}
 };
 
-// ─── TMDB API ─────────────────────────────────────────────────────────────
+// --- TMDB API -------------------------------------------------------------
 const TMDB_KEY_LS = "serieinfo-tmdb";
 const getTmdbKey = () => { try { return localStorage.getItem(TMDB_KEY_LS) || ""; } catch { return ""; } };
 const setTmdbKey = (k) => { try { localStorage.setItem(TMDB_KEY_LS, k); } catch {} };
@@ -72,7 +72,7 @@ async function tmdbSearch(title) {
   const imdbId  = ext.imdb_id || null;
   const year    = show.first_air_date ? show.first_air_date.slice(0, 4) : null;
   const endYear = det.last_air_date   ? det.last_air_date.slice(0, 4)   : null;
-  const yearStr = year && endYear && endYear !== year ? year + "–" + endYear : year;
+  const yearStr = year && endYear && endYear !== year ? year + "-" + endYear : year;
 
   const voteAvg = det.vote_average || show.vote_average || null;
   return {
@@ -87,7 +87,7 @@ async function tmdbSearch(title) {
   };
 }
 
-// ─── Enrich one series: TMDB first, Claude as fallback ────────────────────
+// --- Enrich one series: TMDB first, Claude as fallback --------------------
 async function enrichOne(title, streamingService) {
   // Try TMDB
   try {
@@ -112,7 +112,7 @@ async function enrichOne(title, streamingService) {
   };
 }
 
-// ─── Service kleuren ──────────────────────────────────────────────────────
+// --- Service kleuren ------------------------------------------------------
 const SVC_COLORS = {
   netflix: "#e50914", "apple tv": "#1c1c1e", max: "#002be0", hbo: "#002be0",
   "prime video": "#00a8e1", amazon: "#00a8e1", disney: "#113ccf",
@@ -135,7 +135,7 @@ function parseJsonObject(text) {
   return JSON.parse(text.slice(s, e + 1));
 }
 
-// ─── Import lijst ─────────────────────────────────────────────────────────
+// --- Import lijst ---------------------------------------------------------
 const IMPORT_LIST = [
   ["Unfamiliar","Netflix","https://www.netflix.com"],
   ["Your Friends & Neighbors","Apple TV+","https://tv.apple.com"],
@@ -228,17 +228,17 @@ function chunk(arr, n) {
 }
 const BATCHES = chunk(IMPORT_LIST, 5);
 
-// ─── CSS ──────────────────────────────────────────────────────────────────
+// --- CSS ------------------------------------------------------------------
 
 
 
-// ─── PIN storage ──────────────────────────────────────────────────────────
+// --- PIN storage ----------------------------------------------------------
 const PIN_KEY = "serieinfo-pin";
 const getPin = () => { try { return localStorage.getItem(PIN_KEY) || ""; } catch { return ""; } };
 const savePin = (p) => { try { localStorage.setItem(PIN_KEY, p); } catch {} };
 
-// ─── usePinGuard hook ─────────────────────────────────────────────────────
-// Returns { guard, PinGate } — call guard(callback) to require PIN first
+// --- usePinGuard hook -----------------------------------------------------
+// Returns { guard, PinGate }  -  call guard(callback) to require PIN first
 function usePinGuard() {
   const [pending, setPending] = useState(null); // { cb }
   const [setting, setSetting] = useState(false);
@@ -267,7 +267,7 @@ function usePinGuard() {
   return { guard, PinGate };
 }
 
-// ─── PIN Setup modal ──────────────────────────────────────────────────────
+// --- PIN Setup modal ------------------------------------------------------
 function PinSetup({ onDone, onCancel }) {
   const [step, setStep] = useState(1); // 1=enter, 2=confirm
   const [first, setFirst] = useState("");
@@ -284,15 +284,15 @@ function PinSetup({ onDone, onCancel }) {
   const content = (
     <div className="pin-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
       <div className="pin-modal">
-        <div className="pin-title">🔒 Pincode instellen</div>
+        <div className="pin-title">[PIN] Pincode instellen</div>
         <div className="pin-sub">{step === 1 ? "Kies een pincode van minimaal 4 cijfers." : "Bevestig de pincode."}</div>
         <input className="pin-setup-input" type="password" inputMode="numeric" maxLength={8}
-          placeholder="••••" value={val} autoFocus
+          placeholder="****" value={val} autoFocus
           onChange={e => { setVal(e.target.value.replace(/\D/g, "")); setErr(""); }}
           onKeyDown={e => e.key === "Enter" && submit()} />
         {err && <div className="pin-err">{err}</div>}
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-primary" style={{ flex: 1 }} onClick={submit}>{step === 1 ? "Volgende →" : "Opslaan"}</button>
+          <button className="btn-primary" style={{ flex: 1 }} onClick={submit}>{step === 1 ? "Volgende ->" : "Opslaan"}</button>
           <button className="btn-secondary" onClick={onCancel}>Annuleer</button>
         </div>
       </div>
@@ -301,7 +301,7 @@ function PinSetup({ onDone, onCancel }) {
   return createPortal(content, document.body);
 }
 
-// ─── PIN Verify modal ─────────────────────────────────────────────────────
+// --- PIN Verify modal -----------------------------------------------------
 function PinVerify({ pin, onSuccess, onCancel }) {
   const [input, setInput] = useState("");
   const [err, setErr] = useState(false);
@@ -324,14 +324,14 @@ function PinVerify({ pin, onSuccess, onCancel }) {
   const content = (
     <div className="pin-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
       <div className="pin-modal">
-        <div className="pin-title">🔒 Pincode vereist</div>
+        <div className="pin-title">[PIN] Pincode vereist</div>
         <div className="pin-sub">Voer de pincode in om door te gaan.</div>
         <div className="pin-dots">{dots}</div>
         <div className="pin-grid">
           {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} className="pin-btn" onClick={() => press(String(n))}>{n}</button>)}
           <div />
           <button className="pin-btn" onClick={() => press("0")}>0</button>
-          <button className="pin-btn" onClick={() => setInput(i => i.slice(0,-1))}>⌫</button>
+          <button className="pin-btn" onClick={() => setInput(i => i.slice(0,-1))}><</button>
         </div>
         {err && <div className="pin-err">Onjuiste pincode, probeer opnieuw.</div>}
         <button className="pin-clear" onClick={onCancel}>Annuleer</button>
@@ -341,7 +341,7 @@ function PinVerify({ pin, onSuccess, onCancel }) {
   return createPortal(content, document.body);
 }
 
-// ─── Detail Modal (via Portal — altijd zichtbaar in viewport) ─────────────
+// --- Detail Modal (via Portal  -  altijd zichtbaar in viewport) -------------
 function DetailModal({ item, onClose, onDelete }) {
   const { guard, PinGate } = usePinGuard();
 
@@ -355,7 +355,7 @@ function DetailModal({ item, onClose, onDelete }) {
   const content = (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
-        <button className="modal-close" onClick={onClose}>✕</button>
+        <button className="modal-close" onClick={onClose}>x</button>
         <div className="modal-header">
           <div className="modal-title">{item.title}</div>
           <div className="svc-chip">
@@ -370,14 +370,14 @@ function DetailModal({ item, onClose, onDelete }) {
           </div>
           {item.description && <p className="rdesc">{item.description}</p>}
           <div className="rratings">
-            <div className="rbox"><span className="ricon">🎬</span><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
+            <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
               {/* RT verwijderd */}
           </div>
           <div className="rlinks">
-            {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {item.streaming_service}</a>}
+            {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">> Bekijk op {item.streaming_service}</a>}
             {item.imdb_url && <a href={item.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
               {/* RT link verwijderd */}
-            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => guard(() => { onDelete(item.id); onClose(); })}>🗑 Verwijder</button>
+            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => guard(() => { onDelete(item.id); onClose(); })}>[del] Verwijder</button>
           </div>
         </div>
         <div className="modal-footer">Opgeslagen op {new Date(item.savedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}</div>
@@ -385,7 +385,7 @@ function DetailModal({ item, onClose, onDelete }) {
     </div>
   );
 
-  // Render buiten de DOM-boom — altijd boven alles, ongeacht scrollpositie
+  // Render buiten de DOM-boom  -  altijd boven alles, ongeacht scrollpositie
   return <>
     {createPortal(content, document.body)}
     <PinGate />
@@ -393,19 +393,19 @@ function DetailModal({ item, onClose, onDelete }) {
 }
 
 
-// ─── Extract IMDb title ID from URL ──────────────────────────────────────
+// --- Extract IMDb title ID from URL --------------------------------------
 function extractImdbId(url) {
   const m = (url || "").match(/tt\d{7,}/);
   return m ? m[0] : null;
 }
 
-// ─── Extract TMDB TV ID from URL ──────────────────────────────────────────
+// --- Extract TMDB TV ID from URL ------------------------------------------
 function extractTmdbId(url) {
   const m = (url || "").match(/\/tv\/([0-9]+)/);
   return m ? m[1] : null;
 }
 
-// ─── Fetch from specific TMDB ID ─────────────────────────────────────────
+// --- Fetch from specific TMDB ID -----------------------------------------
 async function fetchFromTmdbId(tmdbId) {
   const key = getTmdbKey();
   if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
@@ -422,7 +422,7 @@ async function fetchFromTmdbId(tmdbId) {
 
   const year    = det.first_air_date ? det.first_air_date.slice(0, 4) : null;
   const endYear = det.last_air_date  ? det.last_air_date.slice(0, 4)  : null;
-  const yearStr = year && endYear && endYear !== year ? year + "–" + endYear : year;
+  const yearStr = year && endYear && endYear !== year ? year + "-" + endYear : year;
   const imdbId  = ext.imdb_id || null;
 
   const voteAvg = det.vote_average || null;
@@ -439,7 +439,7 @@ async function fetchFromTmdbId(tmdbId) {
   };
 }
 
-// ─── Fetch series data using IMDb URL ─────────────────────────────────────
+// --- Fetch series data using IMDb URL -------------------------------------
 async function fetchFromImdbUrl(imdbUrl, fallbackTitle) {
   const imdbId = extractImdbId(imdbUrl);
 
@@ -469,7 +469,7 @@ async function fetchFromImdbUrl(imdbUrl, fallbackTitle) {
   return JSON.parse(text.slice(s, e + 1));
 }
 
-// ─── Single series AI re-search ───────────────────────────────────────────
+// --- Single series AI re-search -------------------------------------------
 async function researchSeries(title, streamingService) {
   const prompt =
     'You are a TV series expert. Find accurate information for the TV series "' + title + '" available on ' + streamingService + '.\n\n' +
@@ -483,7 +483,7 @@ async function researchSeries(title, streamingService) {
   return parseJsonObject(text);
 }
 
-// ─── Edit Modal ────────────────────────────────────────────────────────────
+// --- Edit Modal ------------------------------------------------------------
 function EditModal({ item, onSave, onClose }) {
   const { guard, PinGate } = usePinGuard();
   const [form, setForm] = useState({
@@ -523,7 +523,7 @@ function EditModal({ item, onSave, onClose }) {
         tmdb_rating: data.tmdb_rating || f.tmdb_rating,
         imdb_url:    data.imdb_url    || f.imdb_url,
       }));
-      const src = data.source === "tmdb" ? "✓ Gevonden via TMDB" : "✓ Gevonden via AI";
+      const src = data.source === "tmdb" ? "v Gevonden via TMDB" : "v Gevonden via AI";
       setSearchOk(src);
     } catch (e) {
       setSearchErr(e.message || "Zoeken mislukt");
@@ -564,7 +564,7 @@ function EditModal({ item, onSave, onClose }) {
         imdb_url:    data.imdb_url    || f.imdb_url,
         tmdb_rating: data.tmdb_rating || f.tmdb_rating,
       }));
-      setTmdbFetchOk("✓ Gevonden: " + (data.title || "onbekend") + (data.year ? " (" + data.year + ")" : ""));
+      setTmdbFetchOk("v Gevonden: " + (data.title || "onbekend") + (data.year ? " (" + data.year + ")" : ""));
     } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
     finally { setTmdbFetching(false); }
   }
@@ -614,21 +614,21 @@ function EditModal({ item, onSave, onClose }) {
             <span className="svc-name">{item.streaming_service}</span>
           </div>
         </div>
-        <button className="modal-close" onClick={onClose}>✕</button>
+        <button className="modal-close" onClick={onClose}>x</button>
 
-        {/* AI re-search — always visible at top */}
+        {/* AI re-search  -  always visible at top */}
         <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:10,
                       padding:"14px 16px", marginBottom:18,
                       display:"flex", alignItems:"center", justifyContent:"space-between",
                       gap:12, flexWrap:"wrap" }}>
           <div>
             <div style={{ fontSize:14, fontWeight:600, color:"#1a1a2e", marginBottom:3 }}>
-              🔍 AI Herzoeken
+              [zoek] AI Herzoeken
             </div>
             <div style={{ fontSize:12, color:"#6e6e73" }}>
               Haal automatisch nieuwe gegevens op voor deze serie
             </div>
-            {searchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:4 }}>⚠️ {searchErr}</div>}
+            {searchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:4 }}>! {searchErr}</div>}
             {searchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:4 }}>{searchOk}</div>}
           </div>
           <button
@@ -639,7 +639,7 @@ function EditModal({ item, onSave, onClose }) {
                      padding:"9px 18px", cursor: searching ? "not-allowed" : "pointer",
                      display:"flex", alignItems:"center", gap:6, flexShrink:0 }}
           >
-            {searching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Zoeken…</> : "Zoek opnieuw"}
+            {searching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Zoeken...</> : "Zoek opnieuw"}
           </button>
         </div>
 
@@ -649,7 +649,7 @@ function EditModal({ item, onSave, onClose }) {
           {/* TMDB URL lookup */}
           <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:9, padding:"12px 14px" }}>
             <div style={{ fontSize:12, fontWeight:600, color:"#1a1a2e", marginBottom:6 }}>
-              🎬 TMDB URL <span style={{ fontWeight:400, color:"#6e6e73" }}>— plak de themoviedb.org URL om gegevens op te halen</span>
+              [film] TMDB URL <span style={{ fontWeight:400, color:"#6e6e73" }}> -  plak de themoviedb.org URL om gegevens op te halen</span>
             </div>
             <div style={{ display:"flex", gap:7, alignItems:"center", flexWrap:"wrap" }}>
               <input
@@ -667,10 +667,10 @@ function EditModal({ item, onSave, onClose }) {
                          fontSize:13, fontWeight:600, padding:"8px 16px",
                          cursor: !tmdbUrl || tmdbFetching ? "not-allowed" : "pointer",
                          display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
-                {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen…</> : "🎬 Haal op via TMDB"}
+                {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen...</> : "[film] Haal op via TMDB"}
               </button>
             </div>
-            {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>⚠️ {tmdbFetchErr}</div>}
+            {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
             {tmdbFetchOk  && <div style={{ fontSize:11, color:"#28a745", marginTop:5 }}>{tmdbFetchOk}</div>}
           </div>
 
@@ -693,7 +693,7 @@ function EditModal({ item, onSave, onClose }) {
             <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
               <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase",
                               color: form.imdb_url ? "#6e6e73" : "#dc3545", fontWeight:600 }}>
-                IMDb URL{!form.imdb_url && " ⚠ ontbreekt"}
+                IMDb URL{!form.imdb_url && " ! ontbreekt"}
               </label>
               <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
                 <input
@@ -713,16 +713,16 @@ function EditModal({ item, onSave, onClose }) {
                              fontSize:12, fontWeight:600, padding:"9px 13px",
                              cursor: imdbFetching ? "not-allowed" : "pointer",
                              display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
-                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen…</> : "⭐ Haal op"}
+                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen...</> : "* Haal op"}
                   </button>
                 )}
                 {form.imdb_url && (
                   <a href={form.imdb_url} target="_blank" rel="noopener noreferrer"
-                    style={{ fontSize:12, color:"#0066cc", whiteSpace:"nowrap", textDecoration:"none", padding:"9px 4px" }}>↗</a>
+                    style={{ fontSize:12, color:"#0066cc", whiteSpace:"nowrap", textDecoration:"none", padding:"9px 4px" }}>^</a>
                 )}
               </div>
-              {imdbFetchErr && <div style={{ fontSize:11, color:"#c82333" }}>⚠️ {imdbFetchErr}</div>}
-              {imdbFetchOk  && <div style={{ fontSize:11, color:"#28a745" }}>✓ Gegevens opgehaald via IMDb ID</div>}
+              {imdbFetchErr && <div style={{ fontSize:11, color:"#c82333" }}>! {imdbFetchErr}</div>}
+              {imdbFetchOk  && <div style={{ fontSize:11, color:"#28a745" }}>v Gegevens opgehaald via IMDb ID</div>}
             </div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -732,7 +732,7 @@ function EditModal({ item, onSave, onClose }) {
         {/* Buttons */}
         <div style={{ display:"flex", gap:8, marginTop:20 }}>
           <button className="btn-primary" style={{ flex:1 }} onClick={handleSave}>
-            🔒 Opslaan
+            [PIN] Opslaan
           </button>
           <button className="btn-secondary" onClick={onClose}>Annuleer</button>
         </div>
@@ -748,7 +748,7 @@ function EditModal({ item, onSave, onClose }) {
 }
 
 
-// ─── Library ───────────────────────────────────────────────────────────────
+// --- Library ---------------------------------------------------------------
 function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdate, onGo }) {
   const { guard, PinGate } = usePinGuard();
   const [q, setQ] = useState("");
@@ -779,37 +779,37 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
           <h2 className="ltitle">Mijn <em>Bibliotheek</em></h2>
           <p className="lcount">
             {library.length} series
-            {watchedCount > 0 && <span style={{ color: "#28a745", marginLeft: 8 }}>· {watchedCount} bekeken</span>}
-            {enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>· AI verrijkt {enrichingIds.size}…</span>}
+            {watchedCount > 0 && <span style={{ color: "#28a745", marginLeft: 8 }}>. {watchedCount} bekeken</span>}
+            {enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>. AI verrijkt {enrichingIds.size}...</span>}
           </p>
         </div>
         <div className="controls">
-          <input className="si" placeholder="Zoek naam, genre of omschrijving…" value={q} onChange={e => setQ(e.target.value)} />
+          <input className="si" placeholder="Zoek naam, genre of omschrijving..." value={q} onChange={e => setQ(e.target.value)} />
           {svcs.map(s => <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>)}
-          {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "TMDB ↓"]].map(([v, l]) =>
+          {[["recent", "Nieuwste"], ["az", "A-Z"], ["imdb", "TMDB v"]].map(([v, l]) =>
             <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>)}
           <button
             className={"fb watched-filter " + (hideWatched ? "on" : "")}
             onClick={() => setHideWatched(h => !h)}
             title="Bekeken series verbergen"
           >
-            {hideWatched ? "✓ Bekeken verborgen" : "👁 Verberg bekeken"}
+            {hideWatched ? "v Bekeken verborgen" : "[oog] Verberg bekeken"}
           </button>
         </div>
       </div>
       <div className="lbody">
         {library.length === 0 ? (
           <div className="empty">
-            <div className="empty-ico">🎬</div>
+            <div className="empty-ico">[film]</div>
             <h3>Bibliotheek is leeg</h3>
             <p>Gebruik Import om alle series te laden,<br />of voeg ze toe via Zoeken.</p>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 18, flexWrap: "wrap" }}>
-              <button className="btn-primary" onClick={() => onGo("import")}>📥 Importeer lijst</button>
-              <button className="btn-secondary" onClick={() => onGo("search")}>🔍 Zoek serie</button>
+              <button className="btn-primary" onClick={() => onGo("import")}>[in] Importeer lijst</button>
+              <button className="btn-secondary" onClick={() => onGo("search")}>[zoek] Zoek serie</button>
             </div>
           </div>
         ) : list.length === 0 ? (
-          <div className="empty"><div className="empty-ico">🔍</div><h3>Geen resultaten</h3>
+          <div className="empty"><div className="empty-ico">[zoek]</div><h3>Geen resultaten</h3>
             {hideWatched && <p style={{ marginTop: 8 }}>Alle series zijn gemarkeerd als bekeken.<br /><button className="btn-secondary" style={{ marginTop: 12, fontSize: 13 }} onClick={() => setHideWatched(false)}>Toon bekeken series</button></p>}
           </div>
         ) : (
@@ -836,19 +836,19 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
                         {(item.genres || []).slice(0, 2).map(g => <span key={g} className="lrow-genre">{g}</span>)}
                       </div>
                     </div>
-                    {isEnriching ? <div className="lrow-enr">⏳ AI verrijkt…</div>
+                    {isEnriching ? <div className="lrow-enr">... AI verrijkt...</div>
                       : item.description ? <div className="lrow-desc">{item.description}</div>
                       : null}
                   </div>
                   <div className="lrow-right">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div className="lrow-svc">{item.streaming_service}</div>
-                      <button className="lrow-del" title="Verwijder" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>✕</button>
-                      <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>✎</button>
+                      <button className="lrow-del" title="Verwijder" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>x</button>
+                      <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>/</button>
                     </div>
                     <div className="lrow-btns">
-                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>🎬 {item.tmdb_rating}</span>}</>}
-                      {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>▶ Bekijk</a>}
+                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>[film] {item.tmdb_rating}</span>}</>}
+                      {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>> Bekijk</a>}
                     </div>
                   </div>
                 </div>
@@ -864,7 +864,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
   );
 }
 
-// ─── Search ────────────────────────────────────────────────────────────────
+// --- Search ----------------------------------------------------------------
 function SearchPage({ library, onSave }) {
   const { guard, PinGate } = usePinGuard();
   const [series, setSeries] = useState("");
@@ -900,7 +900,7 @@ function SearchPage({ library, onSave }) {
         streaming_service: prev?.streaming_service || streaming,
         streaming_url:     prev?.streaming_url     || null,
       }));
-      setTmdbFetchOk("✓ " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
+      setTmdbFetchOk("v " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
     } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
     finally { setTmdbFetching(false); }
   }
@@ -927,9 +927,21 @@ function SearchPage({ library, onSave }) {
 
   const alreadySaved = result ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase()) : false;
 
+  function handleSaveToLibrary() {
+    if (alreadySaved) return;
+    const item = {
+      ...result,
+      imdb_url:    imdbUrlOverride || (result ? result.imdb_url : null) || null,
+      tmdb_rating: result ? result.tmdb_rating : null,
+      id: "s" + Date.now(),
+      savedAt: new Date().toISOString(),
+    };
+    guard(() => { onSave(item); setSaved(true); });
+  }
+
   async function doSearch() {
     if (!series.trim()) return;
-    setLoading(true); setError(""); setResult(null); setSaved(false); setStatus("AI zoekt op…");
+    setLoading(true); setError(""); setResult(null); setSaved(false); setStatus("AI zoekt op...");
     try {
       const prompt =
         'Geef informatie over de TV serie "' + series.trim() + '" op streamingdienst "' + (streaming.trim() || "onbekend") + '".\n\n' +
@@ -950,28 +962,28 @@ function SearchPage({ library, onSave }) {
   return (
     <div className="page">
       <div className="s-hero">
-        <div className="s-eyebrow">AI-Powered · TMDB · Gratis</div>
+        <div className="s-eyebrow">AI-Powered . TMDB . Gratis</div>
         <h1 className="s-title">Ontdek je <em>favoriete</em> series</h1>
         <p className="s-sub">Zoek een tv-serie op, haal details op via TMDB en sla ze op in je persoonlijke bibliotheek.</p>
       </div>
       <div className="s-form">
         <div className="field">
           <label className="flabel">TV Serie</label>
-          <input className="finput" placeholder="bv. Breaking Bad, Succession…" value={series}
+          <input className="finput" placeholder="bv. Breaking Bad, Succession..." value={series}
             onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); setImdbUrlOverride(""); setTmdbUrlInput(""); setTmdbFetchOk(""); setTmdbFetchErr(""); }}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <div className="field">
           <label className="flabel">Streamingdienst</label>
-          <input className="finput" placeholder="bv. Netflix, Disney+, Prime…" value={streaming}
+          <input className="finput" placeholder="bv. Netflix, Disney+, Prime..." value={streaming}
             onChange={e => setStreaming(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <button className="btn-primary" onClick={doSearch} disabled={loading || !series.trim()}>
-          {loading ? <><span className="spin" />Zoeken…</> : "ZOEK INFORMATIE OP"}
+          {loading ? <><span className="spin" />Zoeken...</> : "ZOEK INFORMATIE OP"}
         </button>
-        {status && <div className="status-bar">🔍 {status}</div>}
-        {error && <div className="err-bar">⚠️ {error}</div>}
+        {status && <div className="status-bar">[zoek] {status}</div>}
+        {error && <div className="err-bar">! {error}</div>}
       </div>
       {result && (
         <div className="result">
@@ -985,12 +997,12 @@ function SearchPage({ library, onSave }) {
             </div>
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
-              <div className="rbox"><span className="ricon">🎬</span><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
+              <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
             </div>
 
             {/* TMDB URL ophalen */}
             <div className="tmdb-block">
-              <div className="tmdb-block-title">🎬 TMDB URL</div>
+              <div className="tmdb-block-title">[film] TMDB URL</div>
               <div className="tmdb-block-sub">Plak de themoviedb.org URL om gegevens op te halen</div>
               <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
                 <input
@@ -1007,12 +1019,12 @@ function SearchPage({ library, onSave }) {
                              color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
                              padding:"9px 16px", cursor: tmdbFetching ? "not-allowed" : "pointer",
                              display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
-                    {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen…</> : "🎬 Haal op via TMDB"}
+                    {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen...</> : "[film] Haal op via TMDB"}
                   </button>
                 )}
               </div>
-              {tmdbFetchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:5 }}>⚠️ {tmdbFetchErr}</div>}
-              {tmdbFetchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:5 }}>✓ {tmdbFetchOk}</div>}
+              {tmdbFetchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
+              {tmdbFetchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:5 }}>v {tmdbFetchOk}</div>}
             </div>
 
             {/* Bewerkbaar IMDb URL veld met ophalen-knop */}
@@ -1020,7 +1032,7 @@ function SearchPage({ library, onSave }) {
               <label className="flabel">IMDb URL
                 {!result.imdb_url && !imdbUrlOverride && (
                   <span style={{ color:"#dc3545", fontWeight:400, letterSpacing:0, textTransform:"none", marginLeft:6 }}>
-                    — niet gevonden, voer handmatig in
+                     -  niet gevonden, voer handmatig in
                   </span>
                 )}
               </label>
@@ -1042,40 +1054,28 @@ function SearchPage({ library, onSave }) {
                              color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
                              padding:"9px 16px", cursor: imdbFetching ? "not-allowed" : "pointer",
                              display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
-                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen…</> : "⭐ Haal gegevens op"}
+                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen...</> : "* Haal gegevens op"}
                   </button>
                 )}
                 {imdbUrlOverride && !imdbFetching && (
                   <a href={imdbUrlOverride} target="_blank" rel="noopener noreferrer"
                     className="lb sec" style={{ whiteSpace:"nowrap", flexShrink:0, padding:"9px 14px" }}>
-                    Bekijk ↗
+                    Bekijk ^
                   </a>
                 )}
               </div>
-              {imdbFetchErr && <div style={{ fontSize:12, color:"#c82333" }}>⚠️ {imdbFetchErr}</div>}
+              {imdbFetchErr && <div style={{ fontSize:12, color:"#c82333" }}>! {imdbFetchErr}</div>}
             </div>
 
             <div className="rlinks">
-              {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {result.streaming_service}</a>}
+              {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">> Bekijk op {result.streaming_service}</a>}
               <button className={"lb " + (saved || alreadySaved ? "saved" : "save")}
-                onClick={() => {
-                  if (alreadySaved) return;
-                  guard(() => {
-                    onSave({
-                      ...result,
-                      imdb_url:    imdbUrlOverride || result.imdb_url    || null,
-                      tmdb_rating: result.tmdb_rating || null,
-                      id: "s" + Date.now(),
-                      savedAt: new Date().toISOString()
-                    });
-                    setSaved(true);
-                  });
-                }}
+                onClick={handleSaveToLibrary}
                 disabled={saved || alreadySaved}>
-                {saved || alreadySaved ? "✓ Opgeslagen" : "+ Opslaan in bibliotheek"}
+                {saved || alreadySaved ? "v Opgeslagen" : "+ Opslaan in bibliotheek"}
               </button>
             </div>
-            <div className="rfooter">Informatie via Claude AI · IMDb</div>
+            <div className="rfooter">Informatie via Claude AI . IMDb</div>
           </div>
         </div>
       )}
@@ -1084,7 +1084,7 @@ function SearchPage({ library, onSave }) {
   );
 }
 
-// ─── Import ────────────────────────────────────────────────────────────────
+// --- Import ----------------------------------------------------------------
 function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
   const [phase,      setPhase]      = useState("idle");
   const [savedCount, setSavedCount] = useState(0);
@@ -1096,6 +1096,12 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
   const pct = phase === "step2" ? Math.round((enriched / IMPORT_LIST.length) * 100) : phase === "done" ? 100 : 0;
 
   function saveTmdbKey(k) { setTmdbKey(k); setTmdbKeyState(k); }
+
+  function handleReset() {
+    if (window.confirm("Alle AI-gegevens verwijderen en opnieuw importeren? Titels blijven bewaard.")) {
+      onResetLibrary();
+    }
+  }
 
   async function start() {
     running.current = true;
@@ -1117,7 +1123,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
 
     let working = [...merged];
 
-    // Process each series individually — TMDB first, Claude as fallback
+    // Process each series individually  -  TMDB first, Claude as fallback
     const toEnrich = IMPORT_LIST.filter(s => {
       const found = working.find(w => w.title.toLowerCase() === s.title.toLowerCase());
       return found && !found.enriched;
@@ -1170,11 +1176,11 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
           <div style={{ display:"flex", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
             <div style={{ flex:1, minWidth:240 }}>
               <div style={{ fontSize:13, fontWeight:600, color:"#1a1a2e", marginBottom:4 }}>
-                🎬 TMDB API-sleutel
-                {tmdbKey && <span style={{ color:"#28a745", marginLeft:8, fontWeight:400 }}>✓ Ingesteld</span>}
+                [film] TMDB API-sleutel
+                {tmdbKey && <span style={{ color:"#28a745", marginLeft:8, fontWeight:400 }}>v Ingesteld</span>}
               </div>
               <div style={{ fontSize:12, color:"#6e6e73", marginBottom:8, lineHeight:1.5 }}>
-                Gratis sleutel via <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style={{ color:"#0066cc" }}>themoviedb.org</a> → Settings → API → Read Access Token.<br />
+                Gratis sleutel via <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style={{ color:"#0066cc" }}>themoviedb.org</a> -> Settings -> API -> Read Access Token.<br />
                 Met TMDB worden vrijwel alle series gevonden. Zonder TMDB gebruikt de app alleen AI als fallback.
               </div>
               <input
@@ -1193,17 +1199,13 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
         {phase === "idle" && (
           <div className="imp-card">
             <p style={{ fontSize: 13, color: "#6e6e73", lineHeight: 1.7, marginBottom: 14 }}>
-              <strong>{IMPORT_LIST.length} series</strong> worden één voor één opgezocht.<br />
-              {tmdbKey ? "✓ TMDB actief — hoge nauwkeurigheid." : "⚠ Geen TMDB-sleutel — alleen AI als fallback."}<br />
+              <strong>{IMPORT_LIST.length} series</strong> worden een voor een opgezocht.<br />
+              {tmdbKey ? "v TMDB actief  -  hoge nauwkeurigheid." : "! Geen TMDB-sleutel  -  alleen AI als fallback."}<br />
               Bibliotheek is direct zichtbaar, verrijking loopt op de achtergrond.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <button className="btn-primary" onClick={start}>▶ Start import</button>
-              <button className="btn-secondary" onClick={() => {
-                if (window.confirm("Alle AI-gegevens verwijderen en opnieuw importeren? Titels en streamingdiensten blijven bewaard.")) {
-                  onResetLibrary();
-                }
-              }}>↺ Reset &amp; herstart</button>
+              <button className="btn-primary" onClick={start}>> Start import</button>
+              <button className="btn-secondary" onClick={handleReset}>Reset herstart</button>
             </div>
           </div>
         )}
@@ -1213,7 +1215,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
             {phase === "step1" && (
               <div style={{ display:"flex", alignItems:"center", gap:9 }}>
                 <span className="spin" />
-                <span style={{ fontSize:14, color:"#6e6e73" }}>Basisdata opslaan…</span>
+                <span style={{ fontSize:14, color:"#6e6e73" }}>Basisdata opslaan...</span>
               </div>
             )}
             {phase === "step2" && (
@@ -1225,7 +1227,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
                 <div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div>
                 <div className="prog-sub">
                   {enriched} van {IMPORT_LIST.length} verwerkt
-                  {current && <span style={{ marginLeft:8, color:"#aaa" }}>· {current}</span>}
+                  {current && <span style={{ marginLeft:8, color:"#aaa" }}>. {current}</span>}
                 </div>
               </>
             )}
@@ -1234,11 +1236,11 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
 
         {phase === "done" && (
           <div className="done-card">
-            <div className="done-ico">✓</div>
+            <div className="done-ico">v</div>
             <div className="done-title">{savedCount} SERIES OPGESLAGEN</div>
             <div className="done-sub">
               {enriched} series verwerkt.
-              {errors.length > 0 && " · " + errors.length + " serie(s) deels mislukt."}
+              {errors.length > 0 && " . " + errors.length + " serie(s) deels mislukt."}
               <br />Open de <strong style={{ color:"#28a745" }}>Bibliotheek</strong>.
             </div>
             <div style={{ marginTop:14 }}>
@@ -1254,7 +1256,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
   );
 }
 
-// ─── Root ──────────────────────────────────────────────────────────────────
+// --- Root ------------------------------------------------------------------
 export default function App() {
   const [page, setPage] = useState("search");
   const [library, setLibrary] = useState([]);
@@ -1300,11 +1302,11 @@ export default function App() {
         <nav className="nav">
           <div className="logo" onClick={() => setPage("search")}><span className="logo-dot"></span>Serie<em>Info</em></div>
           <div className="tabs">
-            <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>🔍 Zoeken</button>
+            <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>[zoek] Zoeken</button>
             <button className={"tab " + (page === "library" ? "on" : "")} onClick={() => setPage("library")}>
-              📚 Bibliotheek{library.length > 0 && <span className="badge">{library.length}</span>}
+              [lib] Bibliotheek{library.length > 0 && <span className="badge">{library.length}</span>}
             </button>
-            <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>📥 Import</button>
+            <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>[in] Import</button>
           </div>
         </nav>
         {page === "search" && <SearchPage library={library} onSave={addItem} />}
