@@ -988,6 +988,7 @@ function SearchPage({ library, onSave }) {
       {result && (
         <div className="result">
           <div className="rcard card">
+            <div className="rcard-header">
               <div className="rtitle">{result.title}</div>
               <div className="svc-chip"><div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} /><span className="svc-name">{result.streaming_service}</span></div>
             </div>
