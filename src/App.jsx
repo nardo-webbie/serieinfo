@@ -158,24 +158,25 @@ function exportLibrary(library, films) {
 // --- Sync Bar Component --------------------------------------------------
 function SyncBar({ library, films, onImport }) {
   const [enabled,  setEnabled]  = useState(getSyncEnabled);
-  const [status,   setStatus]   = useState("idle"); // idle | syncing | ok | error
+  const [status,   setStatus]   = useState("idle");
   const [msg,      setMsg]      = useState("");
   const [lastSync, setLastSync] = useState(null);
 
-  // Auto-sync when library or films change
+  // Auto-sync 2s after any change when enabled
   useEffect(() => {
     if (!enabled) return;
-    const timer = setTimeout(() => pushToCloud(), 1500);
+    const timer = setTimeout(() => doPush(library, films), 2000);
     return () => clearTimeout(timer);
   }, [library, films, enabled]);
 
-  async function pushToCloud() {
+  async function doPush(lib, fms) {
     setStatus("syncing"); setMsg("");
     try {
-      await cloudPut({ library, films });
+      await cloudPut({ library: lib, films: fms });
       setStatus("ok"); setLastSync(new Date());
     } catch (e) {
-      setStatus("error"); setMsg(e.message);
+      setStatus("error");
+      setMsg(e.message.slice(0, 80));
     }
   }
 
@@ -183,47 +184,52 @@ function SyncBar({ library, films, onImport }) {
     setStatus("syncing"); setMsg("");
     try {
       const d = await cloudGet();
-      if (d.library || d.films) {
-        onImport(d.library || [], d.films || []);
-        setStatus("ok"); setLastSync(new Date());
-      } else {
-        setStatus("error"); setMsg("Geen data gevonden in cloud");
-      }
+      const hasData = Array.isArray(d.library) || Array.isArray(d.films);
+      if (!hasData) { setStatus("error"); setMsg("Geen geldige data in cloud"); return; }
+      onImport(Array.isArray(d.library) ? d.library : [], Array.isArray(d.films) ? d.films : []);
+      setStatus("ok"); setLastSync(new Date());
     } catch (e) {
-      setStatus("error"); setMsg(e.message);
+      setStatus("error"); setMsg(e.message.slice(0, 80));
     }
   }
 
   function handleToggle() {
     const next = !enabled;
     setEnabled(next); setSyncEnabled(next);
-    if (next) pushToCloud();
+    if (next) doPush(library, films);
   }
 
-  const dotClass = !enabled ? "off" : status === "syncing" ? "syncing" : status === "ok" ? "ok" : status === "error" ? "error" : "off";
-  const timeStr  = lastSync ? lastSync.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" }) : "";
+  const dot = !enabled ? "off" : { syncing:"syncing", ok:"ok", error:"error" }[status] || "off";
+  const time = lastSync ? lastSync.toLocaleTimeString("nl-NL", { hour:"2-digit", minute:"2-digit" }) : "";
 
   return (
     <div className="sync-bar">
-      <div className="sync-status">
-        <div className={"sync-dot " + dotClass} />
-        {!enabled && "Cloud sync uit"}
-        {enabled && status === "idle"    && "Sync actief"}
-        {enabled && status === "syncing" && "Synchroniseren..."}
-        {enabled && status === "ok"      && "Gesynchroniseerd" + (timeStr ? " om " + timeStr : "")}
-        {enabled && status === "error"   && ("Sync fout: " + msg)}
+      <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+        <div className="sync-status">
+          <div className={"sync-dot " + dot} />
+          {!enabled   && "Cloud sync uitgeschakeld"}
+          {enabled && status === "idle"    && "Sync ingeschakeld - wacht op wijziging"}
+          {enabled && status === "syncing" && "Bezig met synchroniseren..."}
+          {enabled && status === "ok"      && ("Gesynchroniseerd" + (time ? " om " + time : "") + " (" + library.length + " series, " + films.length + " films)")}
+          {enabled && status === "error"   && <span style={{ color:"#dc2626" }}>{"Fout: " + msg}</span>}
+        </div>
       </div>
       <div className="sync-actions">
         <button className="sync-btn" onClick={() => exportLibrary(library, films)}>
           Exporteer JSON
         </button>
         {enabled && (
-          <button className="sync-btn" onClick={pullFromCloud} disabled={status === "syncing"}>
-            Haal op van cloud
-          </button>
+          <>
+            <button className="sync-btn primary" onClick={() => doPush(library, films)} disabled={status === "syncing"}>
+              {status === "syncing" ? "Bezig..." : "Stuur naar cloud"}
+            </button>
+            <button className="sync-btn" onClick={pullFromCloud} disabled={status === "syncing"}>
+              Haal op van cloud
+            </button>
+          </>
         )}
-        <button className={"sync-btn" + (enabled ? "" : " primary")} onClick={handleToggle}>
-          {enabled ? "Sync uitschakelen" : "Sync inschakelen"}
+        <button className={"sync-btn" + (!enabled ? " primary" : "")} onClick={handleToggle}>
+          {enabled ? "Sync uit" : "Sync inschakelen"}
         </button>
       </div>
     </div>
