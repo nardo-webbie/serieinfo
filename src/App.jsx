@@ -184,10 +184,20 @@ function SyncBar({ library, films, onImport }) {
     setStatus("syncing"); setMsg("");
     try {
       const d = await cloudGet();
-      const hasData = Array.isArray(d.library) || Array.isArray(d.films);
-      if (!hasData) { setStatus("error"); setMsg("Geen geldige data in cloud"); return; }
-      onImport(Array.isArray(d.library) ? d.library : [], Array.isArray(d.films) ? d.films : []);
-      setStatus("ok"); setLastSync(new Date());
+      if (!d || typeof d !== "object") {
+        setStatus("error"); setMsg("Ongeldig antwoord van cloud"); return;
+      }
+      const cloudLib   = Array.isArray(d.library) ? d.library : null;
+      const cloudFilms = Array.isArray(d.films)   ? d.films   : null;
+      if (!cloudLib && !cloudFilms) {
+        setStatus("error"); setMsg("Geen data gevonden (library en films leeg)"); return;
+      }
+      onImport(cloudLib || [], cloudFilms || []);
+      const seriesCount = cloudLib   ? cloudLib.length   : 0;
+      const filmsCount  = cloudFilms ? cloudFilms.length : 0;
+      setStatus("ok");
+      setLastSync(new Date());
+      setMsg(seriesCount + " series, " + filmsCount + " films opgehaald");
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     }
@@ -210,7 +220,7 @@ function SyncBar({ library, films, onImport }) {
           {!enabled   && "Cloud sync uitgeschakeld"}
           {enabled && status === "idle"    && "Sync ingeschakeld - wacht op wijziging"}
           {enabled && status === "syncing" && "Bezig met synchroniseren..."}
-          {enabled && status === "ok"      && ("Gesynchroniseerd" + (time ? " om " + time : "") + " (" + library.length + " series, " + films.length + " films)")}
+          {enabled && status === "ok"      && ("Gesynchroniseerd" + (time ? " om " + time : "") + (msg ? " - " + msg : " (" + library.length + " series, " + films.length + " films)"))}
           {enabled && status === "error"   && <span style={{ color:"#dc2626" }}>{"Fout: " + msg}</span>}
         </div>
       </div>
@@ -1831,8 +1841,19 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    if (newLibrary && newLibrary.length >= 0) { setLibrary(newLibrary); saveLib(newLibrary); }
-    if (newFilms    && newFilms.length    >= 0) { setFilms(newFilms);    saveFilms(newFilms); }
+    // Merge cloud + local: cloud wins on conflict (by id), local keeps items not in cloud
+    if (Array.isArray(newLibrary)) {
+      const cloudIds = new Set(newLibrary.map(i => i.id));
+      const localOnly = library.filter(i => !cloudIds.has(i.id));
+      const merged = [...newLibrary, ...localOnly];
+      setLibrary(merged); saveLib(merged);
+    }
+    if (Array.isArray(newFilms)) {
+      const cloudIds = new Set(newFilms.map(f => f.id));
+      const localOnly = films.filter(f => !cloudIds.has(f.id));
+      const merged = [...newFilms, ...localOnly];
+      setFilms(merged); saveFilms(merged);
+    }
   }
   function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
   function toggleFilmWatched(id) {
