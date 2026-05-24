@@ -113,6 +113,123 @@ async function enrichOne(title, streamingService) {
 }
 
 
+
+// --- Cloud Sync (JSONBin via /api/sync proxy) ----------------------------
+const SYNC_ENABLED_KEY = "serieinfo-sync-on";
+const getSyncEnabled = () => localStorage.getItem(SYNC_ENABLED_KEY) === "true";
+const setSyncEnabled = (v) => localStorage.setItem(SYNC_ENABLED_KEY, v ? "true" : "false");
+
+async function cloudGet() {
+  const r = await fetch("/api/sync");
+  if (!r.ok) throw new Error("Sync ophalen mislukt (" + r.status + ")");
+  return r.json();
+}
+async function cloudPut(data) {
+  const r = await fetch("/api/sync", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || "Sync opslaan mislukt (" + r.status + ")");
+  }
+  return r.json();
+}
+async function cloudCreate(data) {
+  const r = await fetch("/api/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error("Sync aanmaken mislukt (" + r.status + ")");
+  return r.json();
+}
+
+function exportLibrary(library, films) {
+  const data = { library, films, exportedAt: new Date().toISOString(), version: 1 };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = "serieinfo-backup.json"; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// --- Sync Bar Component --------------------------------------------------
+function SyncBar({ library, films, onImport }) {
+  const [enabled,  setEnabled]  = useState(getSyncEnabled);
+  const [status,   setStatus]   = useState("idle"); // idle | syncing | ok | error
+  const [msg,      setMsg]      = useState("");
+  const [lastSync, setLastSync] = useState(null);
+
+  // Auto-sync when library or films change
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = setTimeout(() => pushToCloud(), 1500);
+    return () => clearTimeout(timer);
+  }, [library, films, enabled]);
+
+  async function pushToCloud() {
+    setStatus("syncing"); setMsg("");
+    try {
+      await cloudPut({ library, films });
+      setStatus("ok"); setLastSync(new Date());
+    } catch (e) {
+      setStatus("error"); setMsg(e.message);
+    }
+  }
+
+  async function pullFromCloud() {
+    setStatus("syncing"); setMsg("");
+    try {
+      const d = await cloudGet();
+      if (d.library || d.films) {
+        onImport(d.library || [], d.films || []);
+        setStatus("ok"); setLastSync(new Date());
+      } else {
+        setStatus("error"); setMsg("Geen data gevonden in cloud");
+      }
+    } catch (e) {
+      setStatus("error"); setMsg(e.message);
+    }
+  }
+
+  function handleToggle() {
+    const next = !enabled;
+    setEnabled(next); setSyncEnabled(next);
+    if (next) pushToCloud();
+  }
+
+  const dotClass = !enabled ? "off" : status === "syncing" ? "syncing" : status === "ok" ? "ok" : status === "error" ? "error" : "off";
+  const timeStr  = lastSync ? lastSync.toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" }) : "";
+
+  return (
+    <div className="sync-bar">
+      <div className="sync-status">
+        <div className={"sync-dot " + dotClass} />
+        {!enabled && "Cloud sync uit"}
+        {enabled && status === "idle"    && "Sync actief"}
+        {enabled && status === "syncing" && "Synchroniseren..."}
+        {enabled && status === "ok"      && "Gesynchroniseerd" + (timeStr ? " om " + timeStr : "")}
+        {enabled && status === "error"   && ("Sync fout: " + msg)}
+      </div>
+      <div className="sync-actions">
+        <button className="sync-btn" onClick={() => exportLibrary(library, films)}>
+          Exporteer JSON
+        </button>
+        {enabled && (
+          <button className="sync-btn" onClick={pullFromCloud} disabled={status === "syncing"}>
+            Haal op van cloud
+          </button>
+        )}
+        <button className={"sync-btn" + (enabled ? "" : " primary")} onClick={handleToggle}>
+          {enabled ? "Sync uitschakelen" : "Sync inschakelen"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // --- Film Library Storage -----------------------------------------------
 const FILM_KEY = "serieinfo-films";
 const loadFilms = () => { try { return JSON.parse(localStorage.getItem(FILM_KEY) || "[]"); } catch { return []; } };
@@ -1706,6 +1823,11 @@ export default function App() {
   }
   function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
+
+  function importFromCloud(newLibrary, newFilms) {
+    if (newLibrary && newLibrary.length >= 0) { setLibrary(newLibrary); saveLib(newLibrary); }
+    if (newFilms    && newFilms.length    >= 0) { setFilms(newFilms);    saveFilms(newFilms); }
+  }
   function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
   function toggleFilmWatched(id) {
     const u = films.map(f => f.id === id ? { ...f, watched: !f.watched } : f);
@@ -1752,6 +1874,7 @@ export default function App() {
         {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onUpdate={updateItem} onGo={setPage} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
+      <SyncBar library={library} films={films} onImport={importFromCloud} />
     </>
   );
 }
