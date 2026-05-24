@@ -112,6 +112,80 @@ async function enrichOne(title, streamingService) {
   };
 }
 
+
+// --- Film Library Storage -----------------------------------------------
+const FILM_KEY = "serieinfo-films";
+const loadFilms = () => { try { return JSON.parse(localStorage.getItem(FILM_KEY) || "[]"); } catch { return []; } };
+const saveFilms = (items) => { try { localStorage.setItem(FILM_KEY, JSON.stringify(items)); } catch {} };
+
+// --- TMDB Movie Search ---------------------------------------------------
+async function tmdbMovieSearch(title) {
+  const key = getTmdbKey();
+  if (!key) return null;
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+
+  const s = await fetch(
+    "https://api.themoviedb.org/3/search/movie?query=" + encodeURIComponent(title) + "&language=en-US&page=1",
+    { headers }
+  );
+  const sd = await s.json();
+  if (!sd.results || !sd.results.length) return null;
+
+  const movie = sd.results[0];
+  const id = movie.id;
+
+  const [det, ext] = await Promise.all([
+    fetch("https://api.themoviedb.org/3/movie/" + id + "?language=en-US", { headers }).then(r => r.json()),
+    fetch("https://api.themoviedb.org/3/movie/" + id + "/external_ids", { headers }).then(r => r.json()),
+  ]);
+
+  const imdbId = ext.imdb_id || null;
+  const vote = det.vote_average || movie.vote_average || null;
+
+  return {
+    title:       det.title || movie.title,
+    year:        (det.release_date || movie.release_date || "").slice(0, 4) || null,
+    genres:      (det.genres || []).map(g => g.name),
+    description: det.overview || movie.overview || null,
+    tmdb_rating: vote ? parseFloat(vote).toFixed(1) + "/10" : null,
+    imdb_rating: null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  (det.poster_path || movie.poster_path)
+                   ? "https://image.tmdb.org/t/p/w342" + (det.poster_path || movie.poster_path)
+                   : null,
+    tmdb_id:     id,
+  };
+}
+
+// --- TMDB Movie fetch by ID ---------------------------------------------
+async function fetchMovieFromTmdbId(tmdbId) {
+  const key = getTmdbKey();
+  if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+  const base = "https://api.themoviedb.org/3/movie/" + tmdbId;
+
+  const [det, ext] = await Promise.all([
+    fetch(base + "?language=en-US", { headers }).then(r => r.json()),
+    fetch(base + "/external_ids",   { headers }).then(r => r.json()),
+  ]);
+  if (det.success === false) throw new Error("Film niet gevonden (ID " + tmdbId + ")");
+
+  const imdbId = ext.imdb_id || null;
+  const vote   = det.vote_average || null;
+
+  return {
+    title:       det.title || null,
+    year:        (det.release_date || "").slice(0, 4) || null,
+    genres:      (det.genres || []).map(g => g.name),
+    description: det.overview || null,
+    tmdb_rating: vote ? parseFloat(vote).toFixed(1) + "/10" : null,
+    imdb_rating: null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    tmdb_id:     det.id,
+  };
+}
+
 // --- Service kleuren ------------------------------------------------------
 const SVC_COLORS = {
   netflix: "#e50914", "apple tv": "#1c1c1e", max: "#002be0", hbo: "#002be0",
@@ -864,8 +938,132 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
   );
 }
 
+
+// --- Film Card ----------------------------------------------------------
+function FilmCard({ film, onDelete, onToggleWatched }) {
+  const { guard, PinGate } = usePinGuard();
+
+  function handleDelete() { guard(() => onDelete(film.id)); }
+  function handleWatched() { guard(() => onToggleWatched(film.id)); }
+
+  return (
+    <div className={"film-card" + (film.watched ? " watched" : "")}>
+      {film.poster_url
+        ? <img src={film.poster_url} alt={film.title} className="film-poster" loading="lazy" />
+        : <div className="film-poster-placeholder">[film]</div>
+      }
+      <div className="film-info">
+        <div className="film-title">{film.title}</div>
+        <div className="film-year">{film.year || ""}</div>
+        <div className="film-genres">
+          {(film.genres || []).slice(0, 2).map(g => (
+            <span key={g} className="film-genre">{g}</span>
+          ))}
+        </div>
+        <div className="film-ratings">
+          {film.tmdb_rating && <span className="film-rating tmdb">* {film.tmdb_rating}</span>}
+          {film.imdb_rating && <span className="film-rating imdb">IMDb {film.imdb_rating}</span>}
+        </div>
+        {film.description && <div className="film-desc">{film.description}</div>}
+      </div>
+      <div className="film-actions">
+        <input type="checkbox" className="film-cb" checked={!!film.watched}
+          title={film.watched ? "Markeer als onbekeken" : "Markeer als bekeken"}
+          onChange={handleWatched} />
+        {film.imdb_url && (
+          <a href={film.imdb_url} target="_blank" rel="noopener noreferrer" className="film-imdb-link">
+            IMDb
+          </a>
+        )}
+        <button className="film-del" title="Verwijder" onClick={handleDelete}>x</button>
+      </div>
+      <PinGate />
+    </div>
+  );
+}
+
+// --- Film Library Page --------------------------------------------------
+function FilmLibraryPage({ films, onDelete, onToggleWatched, onGo }) {
+  const [q, setQ]                   = useState("");
+  const [sort, setSort]             = useState("recent");
+  const [hideWatched, setHideWatched] = useState(false);
+
+  const watchedCount = films.filter(f => f.watched).length;
+
+  let list = films.filter(film => {
+    const lq = q.toLowerCase();
+    return (
+      (!lq || film.title?.toLowerCase().includes(lq) ||
+       (film.genres || []).some(g => g.toLowerCase().includes(lq)) ||
+       film.description?.toLowerCase().includes(lq)) &&
+      (!hideWatched || !film.watched)
+    );
+  });
+  if (sort === "az")   list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+  if (sort === "tmdb") list = [...list].sort((a, b) => (parseFloat(b.tmdb_rating) || 0) - (parseFloat(a.tmdb_rating) || 0));
+
+  return (
+    <div className="page">
+      <div className="film-lhdr">
+        <div>
+          <h2 className="film-ltitle">Film<em>Bibliotheek</em></h2>
+          <p className="lcount">
+            {films.length} films
+            {watchedCount > 0 && <span style={{ color:"#16a34a", marginLeft:8 }}>{watchedCount} bekeken</span>}
+          </p>
+        </div>
+        <div className="controls">
+          <input className="si" placeholder="Zoek film, genre..."
+            value={q} onChange={e => setQ(e.target.value)} />
+          {[["recent","Nieuwste"],["az","A-Z"],["tmdb","TMDB"]].map(([v, l]) => (
+            <button key={v} className={"fb" + (sort === v ? " on" : "")} onClick={() => setSort(v)}>{l}</button>
+          ))}
+          <button
+            className={"fb watched-filter" + (hideWatched ? " on" : "")}
+            onClick={() => setHideWatched(h => !h)}>
+            {hideWatched ? "v Verborgen" : "[oog] Verberg bekeken"}
+          </button>
+        </div>
+      </div>
+
+      {films.length === 0 ? (
+        <div className="film-empty">
+          <div style={{ fontSize:52, marginBottom:18, opacity:.35 }}>[film]</div>
+          <h3 style={{ fontFamily:"Playfair Display,serif", fontSize:24, color:"#a8a29e", marginBottom:8 }}>
+            Nog geen films
+          </h3>
+          <p style={{ fontSize:14, color:"#c7c3bf", lineHeight:1.65 }}>
+            Ga naar Zoeken en zoek een film op om te beginnen.
+          </p>
+          <div style={{ marginTop:20 }}>
+            <button className="btn-primary" onClick={() => onGo("search")}>Film zoeken</button>
+          </div>
+        </div>
+      ) : list.length === 0 ? (
+        <div className="film-empty">
+          <div style={{ fontSize:36, marginBottom:12, opacity:.4 }}>[zoek]</div>
+          <h3 style={{ fontFamily:"Playfair Display,serif", fontSize:20, color:"#a8a29e" }}>Geen resultaten</h3>
+          {hideWatched && (
+            <button className="btn-secondary" style={{ marginTop:14 }} onClick={() => setHideWatched(false)}>
+              Toon bekeken films
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="film-grid">
+          {list.map(film => (
+            <FilmCard key={film.id} film={film}
+              onDelete={onDelete} onToggleWatched={onToggleWatched} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Search ----------------------------------------------------------------
-function SearchPage({ library, onSave }) {
+function SearchPage({ library, films, onSave, onSaveFilm }) {
+  const [mode, setMode] = useState("series"); // "series" | "film"
   const { guard, PinGate } = usePinGuard();
   const [series, setSeries] = useState("");
   const [streaming, setStreaming] = useState("");
@@ -963,9 +1161,24 @@ function SearchPage({ library, onSave }) {
     <div className="page">
       <div className="s-hero">
         <div className="s-eyebrow">AI-Powered . TMDB . Gratis</div>
-        <h1 className="s-title">Ontdek je <em>favoriete</em> series</h1>
-        <p className="s-sub">Zoek een tv-serie op, haal details op via TMDB en sla ze op in je persoonlijke bibliotheek.</p>
+        <h1 className="s-title">
+          {mode === "series" ? "Ontdek je favoriete series" : "Ontdek je favoriete films"}
+        </h1>
+        <p className="s-sub">
+          {mode === "series"
+            ? "Zoek een tv-serie op en sla op in je persoonlijke bibliotheek."
+            : "Zoek een film op via TMDB en sla op in je filmbibiotheek."}
+        </p>
+        <div className="mode-toggle">
+          <button className={"mode-btn" + (mode === "series" ? " on" : "")} onClick={() => setMode("series")}>
+            Series
+          </button>
+          <button className={"mode-btn" + (mode === "film" ? " on" : "")} onClick={() => setMode("film")}>
+            Films
+          </button>
+        </div>
       </div>
+      {mode === "series" && (
       <div className="s-form">
         <div className="field">
           <label className="flabel">TV Serie</label>
@@ -1080,8 +1293,152 @@ function SearchPage({ library, onSave }) {
           </div>
         </div>
       )}
+      )} {/* end mode === series */}
+
+      {mode === "film" && (
+        <FilmSearchSection films={films} onSaveFilm={onSaveFilm} guard={guard} />
+      )}
+
       <PinGate />
     </div>
+  );
+}
+
+// --- Film Search Section -------------------------------------------------
+function FilmSearchSection({ films, onSaveFilm, guard }) {
+  const [filmTitle, setFilmTitle]     = useState("");
+  const [filmResult, setFilmResult]   = useState(null);
+  const [searching, setSearching]     = useState(false);
+  const [searchErr, setSearchErr]     = useState("");
+  const [saved, setSaved]             = useState(false);
+  const [imdbRating, setImdbRating]   = useState("");
+  const [tmdbUrlInput, setTmdbUrlInput] = useState("");
+  const [tmdbFetching, setTmdbFetching] = useState(false);
+  const [tmdbFetchErr, setTmdbFetchErr] = useState("");
+
+  const alreadySaved = filmResult
+    ? films.some(f => f.title?.toLowerCase() === filmResult.title?.toLowerCase())
+    : false;
+
+  async function doSearch() {
+    if (!filmTitle.trim()) return;
+    setSearching(true); setSearchErr(""); setFilmResult(null); setSaved(false); setImdbRating("");
+    try {
+      const r = await tmdbMovieSearch(filmTitle.trim());
+      if (!r) throw new Error("Film niet gevonden in TMDB. Probeer een TMDB-URL hieronder.");
+      setFilmResult(r);
+    } catch (e) { setSearchErr(e.message || "Zoeken mislukt"); }
+    finally { setSearching(false); }
+  }
+
+  async function doTmdbFetch() {
+    const id = extractTmdbId(tmdbUrlInput.trim());
+    if (!id) { setTmdbFetchErr("Geen TMDB-ID gevonden in de URL"); return; }
+    setTmdbFetching(true); setTmdbFetchErr("");
+    try {
+      const data = await fetchMovieFromTmdbId(id);
+      setFilmResult(data);
+      setSaved(false);
+    } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setTmdbFetching(false); }
+  }
+
+  function handleSave() {
+    if (alreadySaved || !filmResult) return;
+    const item = {
+      ...filmResult,
+      imdb_rating: imdbRating.trim() || null,
+      id: "film" + Date.now(),
+      savedAt: new Date().toISOString(),
+      watched: false,
+    };
+    guard(() => { onSaveFilm(item); setSaved(true); });
+  }
+
+  return (
+    <>
+      <div className="s-form">
+        <div className="field">
+          <label className="flabel">Filmtitel</label>
+          <input className="finput" placeholder="bv. Inception, The Dark Knight..."
+            value={filmTitle}
+            onChange={e => { setFilmTitle(e.target.value); setFilmResult(null); setSaved(false); }}
+            onKeyDown={e => e.key === "Enter" && !searching && doSearch()} />
+        </div>
+        <button className="btn-primary" onClick={doSearch} disabled={searching || !filmTitle.trim()}>
+          {searching ? <><span className="spin" />Zoeken...</> : "Zoek film op"}
+        </button>
+        {searchErr && <div className="err-bar">{searchErr}</div>}
+
+        {/* TMDB URL fallback */}
+        <div className="tmdb-block" style={{ marginTop:8 }}>
+          <div className="tmdb-block-title">[film] TMDB URL</div>
+          <div className="tmdb-block-sub">Niet gevonden? Plak de themoviedb.org/movie URL</div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <input className="finput" style={{ flex:1, fontSize:13, padding:"9px 12px", background:"#fff", borderColor:"#b8d4f0" }}
+              placeholder="https://www.themoviedb.org/movie/27205"
+              value={tmdbUrlInput}
+              onChange={e => { setTmdbUrlInput(e.target.value); setTmdbFetchErr(""); }}
+              onKeyDown={e => e.key === "Enter" && doTmdbFetch()} />
+            {tmdbUrlInput && (
+              <button onClick={doTmdbFetch} disabled={tmdbFetching}
+                style={{ background: tmdbFetching ? "#7bb3e0" : "#0066cc", border:"none", borderRadius:7,
+                         color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                         padding:"9px 16px", cursor: tmdbFetching ? "not-allowed" : "pointer" }}>
+                {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen...</> : "Haal op"}
+              </button>
+            )}
+          </div>
+          {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
+        </div>
+      </div>
+
+      {filmResult && (
+        <div className="film-result">
+          <div className="film-result-card">
+            {filmResult.poster_url
+              ? <img src={filmResult.poster_url} alt={filmResult.title} className="film-result-poster" />
+              : <div className="film-result-poster-ph">[film]</div>}
+            <div className="film-result-body">
+              <div className="film-result-title">{filmResult.title}</div>
+              <div className="film-result-meta">
+                {filmResult.year && <span className="ytag">{filmResult.year}</span>}
+                {(filmResult.genres || []).map(g => <span key={g} className="tag">{g}</span>)}
+              </div>
+              {filmResult.description && <p className="film-result-desc">{filmResult.description}</p>}
+              <div className="film-result-ratings">
+                <div className="film-result-rating">
+                  <div><div className="rl">TMDB</div><div className={"rv " + (filmResult.tmdb_rating ? "tmdb" : "none")}>{filmResult.tmdb_rating || "N/B"}</div></div>
+                </div>
+                <div className="film-result-rating">
+                  <div><div className="rl">IMDb</div><div className={"rv " + (imdbRating ? "imdb" : "none")}>{imdbRating || "N/B"}</div></div>
+                </div>
+              </div>
+              {/* Manual IMDb fields */}
+              <div className="film-imdb-input">
+                <label className="flabel">IMDb score (optioneel)</label>
+                <div className="film-imdb-row">
+                  <input className="finput" style={{ fontSize:13, padding:"8px 12px" }}
+                    placeholder="bv. 8.8/10"
+                    value={imdbRating}
+                    onChange={e => setImdbRating(e.target.value)} />
+                  {filmResult.imdb_url && (
+                    <a href={filmResult.imdb_url} target="_blank" rel="noopener noreferrer"
+                      className="lb sec" style={{ whiteSpace:"nowrap", padding:"8px 14px" }}>IMDb</a>
+                  )}
+                </div>
+              </div>
+              <button
+                className={"lb " + (saved || alreadySaved ? "saved" : "save")}
+                onClick={handleSave}
+                disabled={saved || alreadySaved}>
+                {saved || alreadySaved ? "v Opgeslagen in filmbib." : "[PIN] Opslaan in filmbib."}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1261,6 +1618,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
 export default function App() {
   const [page, setPage] = useState("search");
   const [library, setLibrary] = useState([]);
+  const [films, setFilms]     = useState([]);
   const [enrichingIds, setEnrichingIds] = useState(new Set());
 
   useEffect(() => {
@@ -1273,6 +1631,7 @@ export default function App() {
       document.head.appendChild(link);
     }
     setLibrary(loadLib());
+    setFilms(loadFilms());
   }, []);
 
   function updateLibrary(items) {
@@ -1280,6 +1639,12 @@ export default function App() {
     setEnrichingIds(new Set(items.filter(i => i.enriched === false).map(i => i.id)));
   }
   function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
+  function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
+  function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
+  function toggleFilmWatched(id) {
+    const u = films.map(f => f.id === id ? { ...f, watched: !f.watched } : f);
+    setFilms(u); saveFilms(u);
+  }
   function updateItem(item) { const u = library.map(i => i.id === item.id ? item : i); setLibrary(u); saveLib(u); }
   function resetLibrary() {
     // Keep titles/streaming but wipe all AI data so import starts fresh
@@ -1305,12 +1670,19 @@ export default function App() {
           <div className="tabs">
             <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>[zoek] Zoeken</button>
             <button className={"tab " + (page === "library" ? "on" : "")} onClick={() => setPage("library")}>
-              [lib] Bibliotheek{library.length > 0 && <span className="badge">{library.length}</span>}
+              [lib] Series{library.length > 0 && <span className="badge">{library.length}</span>}
+            </button>
+            <button className={"tab " + (page === "films" ? "on" : "")} onClick={() => setPage("films")}>
+              [film] Films{films.length > 0 && <span className="badge">{films.length}</span>}
             </button>
             <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>[in] Import</button>
           </div>
         </nav>
-        {page === "search" && <SearchPage library={library} onSave={addItem} />}
+        {page === "search" && <SearchPage library={library} films={films} onSave={addItem} onSaveFilm={addFilm} />}
+        {page === "films" && (
+          <FilmLibraryPage films={films} onDelete={deleteFilm}
+            onToggleWatched={toggleFilmWatched} onGo={setPage} />
+        )}
         {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onUpdate={updateItem} onGo={setPage} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
