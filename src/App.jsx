@@ -1179,6 +1179,7 @@ function SearchPage({ library, films, onSave, onSaveFilm }) {
         </div>
       </div>
       {mode === "series" && (
+      <>
       <div className="s-form">
         <div className="field">
           <label className="flabel">TV Serie</label>
@@ -1293,7 +1294,7 @@ function SearchPage({ library, films, onSave, onSaveFilm }) {
           </div>
         </div>
       )}
-      )} {/* end mode === series */}
+      </> )} {/* end mode === series */}
 
       {mode === "film" && (
         <FilmSearchSection films={films} onSaveFilm={onSaveFilm} guard={guard} />
