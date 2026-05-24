@@ -1062,8 +1062,41 @@ function FilmLibraryPage({ films, onDelete, onToggleWatched, onGo }) {
 }
 
 // --- Search ----------------------------------------------------------------
-function SearchPage({ library, films, onSave, onSaveFilm }) {
+function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClearShared }) {
   const [mode, setMode] = useState("series"); // "series" | "film"
+
+  // Handle shared URL/title from phone
+  useEffect(() => {
+    if (!sharedPayload) return;
+    const { url, title, text } = sharedPayload;
+    onClearShared();
+
+    const combined = url || text || title || "";
+
+    // Detect TMDB movie URL
+    if (combined.includes("themoviedb.org/movie")) {
+      setMode("film");
+      return;
+    }
+    // Detect TMDB TV URL
+    if (combined.includes("themoviedb.org/tv")) {
+      setMode("series");
+      setTmdbUrlInput(combined);
+      return;
+    }
+    // IMDb URL  -  put in IMDb field
+    if (combined.includes("imdb.com")) {
+      setMode("series");
+      setImdbUrlOverride(combined);
+      return;
+    }
+    // Plain title text  -  pre-fill search
+    const guessTitle = title || text || "";
+    if (guessTitle) {
+      setMode("series");
+      setSeries(guessTitle);
+    }
+  }, [sharedPayload]);
   const { guard, PinGate } = usePinGuard();
   const [series, setSeries] = useState("");
   const [streaming, setStreaming] = useState("");
@@ -1297,7 +1330,7 @@ function SearchPage({ library, films, onSave, onSaveFilm }) {
       </> )} {/* end mode === series */}
 
       {mode === "film" && (
-        <FilmSearchSection films={films} onSaveFilm={onSaveFilm} guard={guard} />
+        <FilmSearchSection films={films} onSaveFilm={onSaveFilm} guard={guard} sharedPayload={sharedPayload} onClearShared={onClearShared} />
       )}
 
       <PinGate />
@@ -1306,7 +1339,7 @@ function SearchPage({ library, films, onSave, onSaveFilm }) {
 }
 
 // --- Film Search Section -------------------------------------------------
-function FilmSearchSection({ films, onSaveFilm, guard }) {
+function FilmSearchSection({ films, onSaveFilm, guard, sharedPayload, onClearShared }) {
   const [filmTitle, setFilmTitle]     = useState("");
   const [filmResult, setFilmResult]   = useState(null);
   const [searching, setSearching]     = useState(false);
@@ -1316,6 +1349,18 @@ function FilmSearchSection({ films, onSaveFilm, guard }) {
   const [tmdbUrlInput, setTmdbUrlInput] = useState("");
   const [tmdbFetching, setTmdbFetching] = useState(false);
   const [tmdbFetchErr, setTmdbFetchErr] = useState("");
+
+  useEffect(() => {
+    if (!sharedPayload) return;
+    const { url, text, title } = sharedPayload;
+    onClearShared();
+    const combined = url || text || "";
+    if (combined.includes("themoviedb.org/movie")) {
+      setTmdbUrlInput(combined);
+    } else if (title || text) {
+      setFilmTitle(title || text);
+    }
+  }, [sharedPayload]);
 
   const alreadySaved = filmResult
     ? films.some(f => f.title?.toLowerCase() === filmResult.title?.toLowerCase())
@@ -1619,11 +1664,12 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
 export default function App() {
   const [page, setPage] = useState("search");
   const [library, setLibrary] = useState([]);
-  const [films, setFilms]     = useState([]);
+  const [films, setFilms]         = useState([]);
+  const [sharedPayload, setSharedPayload] = useState(null);
   const [enrichingIds, setEnrichingIds] = useState(new Set());
 
   useEffect(() => {
-    // Inject Google Fonts (avoids @import inside JS template literal which breaks Vite)
+    // Inject Google Fonts
     if (!document.getElementById("gfonts")) {
       const link = document.createElement("link");
       link.id   = "gfonts";
@@ -1631,8 +1677,27 @@ export default function App() {
       link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap";
       document.head.appendChild(link);
     }
+
+    // Register service worker (needed for PWA + Share Target)
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+
     setLibrary(loadLib());
     setFilms(loadFilms());
+
+    // Handle incoming share from phone (Web Share Target API)
+    const params = new URLSearchParams(window.location.search);
+    const sharedUrl   = params.get("url")   || "";
+    const sharedTitle = params.get("title") || "";
+    const sharedText  = params.get("text")  || "";
+
+    if (sharedUrl || sharedTitle || sharedText) {
+      // Clean URL so refresh doesn't re-trigger
+      window.history.replaceState({}, "", window.location.pathname);
+      setSharedPayload({ url: sharedUrl, title: sharedTitle, text: sharedText });
+      setPage("search");
+    }
   }, []);
 
   function updateLibrary(items) {
@@ -1679,7 +1744,7 @@ export default function App() {
             <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>[in] Import</button>
           </div>
         </nav>
-        {page === "search" && <SearchPage library={library} films={films} onSave={addItem} onSaveFilm={addFilm} />}
+        {page === "search" && <SearchPage library={library} films={films} onSave={addItem} onSaveFilm={addFilm} sharedPayload={sharedPayload} onClearShared={() => setSharedPayload(null)} />}
         {page === "films" && (
           <FilmLibraryPage films={films} onDelete={deleteFilm}
             onToggleWatched={toggleFilmWatched} onGo={setPage} />
