@@ -1,49 +1,192 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
+import "./App.css";
 
-// ─── API key (localStorage only) ─────────────────────────────────────────
-const API_KEY_LS = "serieinfo-apikey";
-const getKey = () => { try { return localStorage.getItem(API_KEY_LS) || ""; } catch { return ""; } };
-const setKey = (k) => { try { localStorage.setItem(API_KEY_LS, k); } catch {} };
-const delKey = () => { try { localStorage.removeItem(API_KEY_LS); } catch {} };
-
-// ─── Anthropic API (direct browser, no web_search tool) ──────────────────
-async function claude(messages, maxTokens = 1000) {
-  const key = getKey();
-  if (!key) throw new Error("Geen API-key");
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+// --- API via Vercel proxy (geen directe Anthropic calls) ------------------
+async function claude(messages, maxTokens = 1000, system = null) {
+  const body = { model: "claude-haiku-4-5-20251001", max_tokens: maxTokens, messages };
+  if (system) body.system = system;
+  const res = await fetch("/api/claude", {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: maxTokens,
-      messages,
-    }),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error?.message || "HTTP " + res.status);
+  // Lees ruwe tekst eerst  -  voorkomt crash als het geen JSON is
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error("Server fout: " + raw.slice(0, 120));
   }
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
+
+  if (!res.ok) throw new Error(data?.error?.message || data?.error || "API fout " + res.status);
+  if (data.error) throw new Error(data.error.message || String(data.error));
 
   let text = "";
   for (const b of data.content || []) if (b.type === "text") text += b.text;
+  if (!text) throw new Error("Leeg antwoord van API");
   return text;
 }
 
-// ─── Library (localStorage only) ─────────────────────────────────────────
+// --- Library (localStorage) -----------------------------------------------
 const LIB_KEY = "serieinfo-lib";
-const loadLib = () => { try { const v = localStorage.getItem(LIB_KEY); return v ? JSON.parse(v) : []; } catch { return []; } };
-const saveLib = (items) => { try { localStorage.setItem(LIB_KEY, JSON.stringify(items)); } catch {} };
+const loadLib = () => {
+  try { const v = localStorage.getItem(LIB_KEY); return v ? JSON.parse(v) : []; }
+  catch { return []; }
+};
+const saveLib = (items) => {
+  try { localStorage.setItem(LIB_KEY, JSON.stringify(items)); } catch {}
+};
 
-// ─── Service colours ──────────────────────────────────────────────────────
+// --- TMDB API -------------------------------------------------------------
+const TMDB_KEY_LS = "serieinfo-tmdb";
+const getTmdbKey = () => { try { return localStorage.getItem(TMDB_KEY_LS) || ""; } catch { return ""; } };
+const setTmdbKey = (k) => { try { localStorage.setItem(TMDB_KEY_LS, k); } catch {} };
+
+async function tmdbSearch(title) {
+  const key = getTmdbKey();
+  if (!key) return null;
+
+  // 1. Search
+  const s = await fetch(
+    "https://api.themoviedb.org/3/search/tv?query=" + encodeURIComponent(title) +
+    "&language=en-US&page=1",
+    { headers: { Authorization: "Bearer " + key, accept: "application/json" } }
+  );
+  const sd = await s.json();
+  if (!sd.results?.length) return null;
+
+  const show = sd.results[0];
+  const id   = show.id;
+
+  // 2. Details + external IDs in parallel
+  const [det, ext] = await Promise.all([
+    fetch("https://api.themoviedb.org/3/tv/" + id + "?language=en-US",
+      { headers: { Authorization: "Bearer " + key, accept: "application/json" } }).then(r => r.json()),
+    fetch("https://api.themoviedb.org/3/tv/" + id + "/external_ids",
+      { headers: { Authorization: "Bearer " + key, accept: "application/json" } }).then(r => r.json()),
+  ]);
+
+  const imdbId  = ext.imdb_id || null;
+  const year    = show.first_air_date ? show.first_air_date.slice(0, 4) : null;
+  const endYear = det.last_air_date   ? det.last_air_date.slice(0, 4)   : null;
+  const yearStr = year && endYear && endYear !== year ? year + "-" + endYear : year;
+
+  const voteAvg = det.vote_average || show.vote_average || null;
+  return {
+    title:       det.name || show.name,
+    year:        yearStr,
+    genres:      (det.genres || []).map(g => g.name),
+    description: show.overview || det.overview || null,
+    imdb_rating: null,
+    tmdb_rating: voteAvg ? voteAvg.toFixed(1) + "/10" : null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
+  };
+}
+
+// --- Enrich one series: TMDB first, Claude as fallback --------------------
+async function enrichOne(title, streamingService) {
+  // Try TMDB
+  try {
+    const t = await tmdbSearch(title);
+    if (t && (t.description || t.year || t.genres.length)) return { ...t, source: "tmdb" };
+  } catch (_) {}
+
+  // Fallback: Claude AI
+  const text = await claude(
+    [{ role: "user", content:
+      'TV series "' + title + '" on ' + streamingService + '. Return JSON only:\n' +
+      '{"year":"YYYY or null","genres":["str"],"desc":"2-3 sentences English","imdb":"X.X/10 or null","imdb_url":"url or null"}'
+    }],
+    400,
+    "Return only a raw JSON object. No markdown."
+  );
+  const ai = parseJsonObject(text);
+  return {
+    title, year: ai.year || null, genres: ai.genres || [],
+    description: ai.desc || null, imdb_rating: null, tmdb_rating: null,
+    imdb_url: ai.imdb_url || null, poster_url: null, source: "claude",
+  };
+}
+
+
+// --- Film Library Storage -----------------------------------------------
+const FILM_KEY = "serieinfo-films";
+const loadFilms = () => { try { return JSON.parse(localStorage.getItem(FILM_KEY) || "[]"); } catch { return []; } };
+const saveFilms = (items) => { try { localStorage.setItem(FILM_KEY, JSON.stringify(items)); } catch {} };
+
+// --- TMDB Movie Search ---------------------------------------------------
+async function tmdbMovieSearch(title) {
+  const key = getTmdbKey();
+  if (!key) return null;
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+
+  const s = await fetch(
+    "https://api.themoviedb.org/3/search/movie?query=" + encodeURIComponent(title) + "&language=en-US&page=1",
+    { headers }
+  );
+  const sd = await s.json();
+  if (!sd.results || !sd.results.length) return null;
+
+  const movie = sd.results[0];
+  const id = movie.id;
+
+  const [det, ext] = await Promise.all([
+    fetch("https://api.themoviedb.org/3/movie/" + id + "?language=en-US", { headers }).then(r => r.json()),
+    fetch("https://api.themoviedb.org/3/movie/" + id + "/external_ids", { headers }).then(r => r.json()),
+  ]);
+
+  const imdbId = ext.imdb_id || null;
+  const vote = det.vote_average || movie.vote_average || null;
+
+  return {
+    title:       det.title || movie.title,
+    year:        (det.release_date || movie.release_date || "").slice(0, 4) || null,
+    genres:      (det.genres || []).map(g => g.name),
+    description: det.overview || movie.overview || null,
+    tmdb_rating: vote ? parseFloat(vote).toFixed(1) + "/10" : null,
+    imdb_rating: null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  (det.poster_path || movie.poster_path)
+                   ? "https://image.tmdb.org/t/p/w342" + (det.poster_path || movie.poster_path)
+                   : null,
+    tmdb_id:     id,
+  };
+}
+
+// --- TMDB Movie fetch by ID ---------------------------------------------
+async function fetchMovieFromTmdbId(tmdbId) {
+  const key = getTmdbKey();
+  if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+  const base = "https://api.themoviedb.org/3/movie/" + tmdbId;
+
+  const [det, ext] = await Promise.all([
+    fetch(base + "?language=en-US", { headers }).then(r => r.json()),
+    fetch(base + "/external_ids",   { headers }).then(r => r.json()),
+  ]);
+  if (det.success === false) throw new Error("Film niet gevonden (ID " + tmdbId + ")");
+
+  const imdbId = ext.imdb_id || null;
+  const vote   = det.vote_average || null;
+
+  return {
+    title:       det.title || null,
+    year:        (det.release_date || "").slice(0, 4) || null,
+    genres:      (det.genres || []).map(g => g.name),
+    description: det.overview || null,
+    tmdb_rating: vote ? parseFloat(vote).toFixed(1) + "/10" : null,
+    imdb_rating: null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    tmdb_id:     det.id,
+  };
+}
+
+// --- Service kleuren ------------------------------------------------------
 const SVC_COLORS = {
   netflix: "#e50914", "apple tv": "#1c1c1e", max: "#002be0", hbo: "#002be0",
   "prime video": "#00a8e1", amazon: "#00a8e1", disney: "#113ccf",
@@ -55,17 +198,28 @@ const svcColor = (s = "") => {
   return "#888";
 };
 
-// ─── Import list ──────────────────────────────────────────────────────────
+function parseJsonArray(text) {
+  const s = text.indexOf("["), e = text.lastIndexOf("]");
+  if (s === -1 || e === -1) throw new Error("Geen JSON array gevonden");
+  return JSON.parse(text.slice(s, e + 1));
+}
+function parseJsonObject(text) {
+  const s = text.indexOf("{"), e = text.lastIndexOf("}");
+  if (s === -1 || e === -1) throw new Error("Geen JSON object gevonden");
+  return JSON.parse(text.slice(s, e + 1));
+}
+
+// --- Import lijst ---------------------------------------------------------
 const IMPORT_LIST = [
   ["Unfamiliar","Netflix","https://www.netflix.com"],
-  ["The Friend and Neighbors","Apple TV+","https://tv.apple.com"],
+  ["Your Friends & Neighbors","Apple TV+","https://tv.apple.com"],
   ["Dept Q Season 2","Netflix","https://www.netflix.com"],
   ["Ballard","Prime Video","https://www.primevideo.com"],
   ["The Assassin","Prime Video","https://www.primevideo.com"],
   ["Under Salt Marsh","SkyShowtime","https://www.skyshowtime.com"],
   ["Salvador","Netflix","https://www.netflix.com"],
   ["Imperfect Women","Apple TV+","https://tv.apple.com"],
-  ["A Knight of the Seven Kingdoms","Max","https://www.max.com"],
+  ["A Knight of the Seven Kingdoms: The Hedge Knight","Max","https://www.max.com"],
   ["The Madison","SkyShowtime","https://www.skyshowtime.com"],
   ["Slow Horses Season 5","Apple TV+","https://tv.apple.com"],
   ["Mobland Season 2","SkyShowtime","https://www.skyshowtime.com"],
@@ -88,7 +242,7 @@ const IMPORT_LIST = [
   ["The Night Agent","Netflix","https://www.netflix.com"],
   ["This Town","NPO","https://www.npo.nl"],
   ["How to Get to Heaven from Belfast","Netflix","https://www.netflix.com"],
-  ["His and Hers","Netflix","https://www.netflix.com"],
+  ["His & Hers","Netflix","https://www.netflix.com"],
   ["Black Snow","Netflix","https://www.netflix.com"],
   ["Deadwind","Netflix","https://www.netflix.com"],
   ["Nero the Assassin","Netflix","https://www.netflix.com"],
@@ -146,437 +300,136 @@ function chunk(arr, n) {
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
   return out;
 }
-const BATCHES = chunk(IMPORT_LIST, 8);
+const BATCHES = chunk(IMPORT_LIST, 5);
 
-function parseJsonArray(text) {
-  const s = text.indexOf("["), e = text.lastIndexOf("]");
-  if (s === -1 || e === -1) throw new Error("Geen JSON array gevonden");
-  return JSON.parse(text.slice(s, e + 1));
-}
+// --- CSS ------------------------------------------------------------------
 
-function parseJsonObject(text) {
-  const s = text.indexOf("{"), e = text.lastIndexOf("}");
-  if (s === -1 || e === -1) throw new Error("Geen JSON object gevonden");
-  return JSON.parse(text.slice(s, e + 1));
-}
 
-// ─── CSS ──────────────────────────────────────────────────────────────────
-const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Bebas+Neue&display=swap');
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #f5f5f7; min-height: 100vh; font-family: 'Inter', sans-serif; color: #1a1a2e; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
-@keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
-.spin {
-  display: inline-block; width: 14px; height: 14px;
-  border: 2px solid rgba(220,53,69,.2); border-top-color: #dc3545;
-  border-radius: 50%; animation: spin .7s linear infinite;
-  vertical-align: middle; margin-right: 7px;
-}
+// --- PIN storage ----------------------------------------------------------
+const PIN_KEY = "serieinfo-pin";
+const getPin = () => { try { return localStorage.getItem(PIN_KEY) || ""; } catch { return ""; } };
+const savePin = (p) => { try { localStorage.setItem(PIN_KEY, p); } catch {} };
 
-/* NAV */
-.nav {
-  position: sticky; top: 0; z-index: 99;
-  background: rgba(255,255,255,.96); backdrop-filter: blur(12px);
-  border-bottom: 1px solid #e5e5ea;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 24px; height: 56px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.06);
-}
-.logo { font-family: 'Bebas Neue', sans-serif; font-size: 24px; letter-spacing: .07em; color: #1a1a2e; cursor: pointer; }
-.logo em { color: #dc3545; font-style: normal; }
-.nav-right { display: flex; align-items: center; gap: 8px; }
-.tabs { display: flex; gap: 3px; }
-.tab {
-  background: none; border: none; cursor: pointer;
-  font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500;
-  color: #6e6e73; padding: 7px 13px; border-radius: 8px;
-  transition: all .15s; display: flex; align-items: center; gap: 6px;
-}
-.tab:hover { color: #1a1a2e; background: #f0f0f5; }
-.tab.on { color: #dc3545; background: #fff0f1; font-weight: 600; }
-.badge {
-  background: #dc3545; color: #fff; border-radius: 100px;
-  font-size: 10px; font-weight: 700; padding: 2px 7px;
-}
-.key-btn {
-  background: #f0fff4; border: 1px solid #c3e6cb; border-radius: 8px;
-  color: #28a745; font-size: 12px; font-weight: 500; padding: 6px 12px;
-  cursor: pointer; transition: all .15s;
-}
-.key-btn:hover { background: #e0f5e9; }
+// --- usePinGuard hook -----------------------------------------------------
+// Returns { guard, PinGate }  -  call guard(callback) to require PIN first
+function usePinGuard() {
+  const [pending, setPending] = useState(null); // { cb }
+  const [setting, setSetting] = useState(false);
 
-/* BUTTONS */
-.btn-red {
-  background: #dc3545; border: none; border-radius: 8px; color: #fff; cursor: pointer;
-  font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 600;
-  padding: 11px 24px; transition: background .15s;
-  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-}
-.btn-red:hover { background: #c82333; }
-.btn-red:disabled { background: #f5a0a8; cursor: not-allowed; }
-.btn-ghost {
-  background: #fff; border: 1.5px solid #e5e5ea; color: #6e6e73;
-  font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 500;
-  padding: 10px 20px; border-radius: 8px; cursor: pointer;
-  transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
-}
-.btn-ghost:hover { background: #f5f5f7; color: #1a1a2e; }
+  function guard(cb) {
+    const pin = getPin();
+    if (!pin) { setSetting(true); setPending({ cb }); return; }
+    setPending({ cb });
+  }
 
-/* ONBOARDING */
-.onboard {
-  min-height: 100vh; display: flex; align-items: center;
-  justify-content: center; padding: 24px; background: #f5f5f7;
-}
-.ob-card {
-  background: #fff; border: 1px solid #e5e5ea; border-radius: 16px;
-  padding: 40px 36px; max-width: 480px; width: 100%; text-align: center;
-  box-shadow: 0 4px 24px rgba(0,0,0,.08);
-}
-.ob-icon { font-size: 52px; margin-bottom: 16px; }
-.ob-title { font-family: 'Bebas Neue', sans-serif; font-size: 36px; color: #1a1a2e; margin-bottom: 8px; }
-.ob-title em { color: #dc3545; font-style: normal; }
-.ob-sub { font-size: 14px; color: #6e6e73; line-height: 1.7; margin-bottom: 24px; }
-.ob-sub a { color: #dc3545; text-decoration: none; }
-.ob-sub a:hover { text-decoration: underline; }
-.ob-steps { text-align: left; margin-bottom: 24px; display: flex; flex-direction: column; gap: 12px; }
-.step { display: flex; gap: 12px; align-items: flex-start; }
-.step-n {
-  background: #fff0f1; border: 1px solid #f5a0a8; color: #dc3545;
-  font-weight: 700; font-size: 12px; border-radius: 100px;
-  width: 24px; height: 24px; display: flex; align-items: center;
-  justify-content: center; flex-shrink: 0; margin-top: 2px;
-}
-.step-text { font-size: 13px; color: #6e6e73; line-height: 1.6; }
-.step-text strong { color: #1a1a2e; }
-.step-text a { color: #dc3545; text-decoration: none; }
-.flabel { font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: #6e6e73; font-weight: 600; display: block; margin-bottom: 6px; }
-.finput {
-  background: #f5f5f7; border: 1.5px solid #e5e5ea; border-radius: 8px;
-  color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 14px;
-  padding: 11px 14px; outline: none; width: 100%; transition: border-color .15s;
-}
-.finput:focus { border-color: #dc3545; background: #fff; }
-.finput::placeholder { color: #bbb; }
-.key-note { font-size: 11px; color: #aaa; line-height: 1.6; margin-top: 6px; text-align: left; }
-.ob-err { font-size: 12px; color: #c82333; margin-top: 6px; text-align: left; }
+  function PinGate() {
+    const pin = getPin();
 
-/* KEY MODAL */
-.mo-overlay {
-  position: fixed; inset: 0; z-index: 300;
-  background: rgba(0,0,0,.3); backdrop-filter: blur(8px);
-  display: flex; align-items: center; justify-content: center; padding: 16px;
-}
-.km {
-  background: #fff; border-radius: 14px; padding: 28px;
-  max-width: 420px; width: 100%; position: relative;
-  box-shadow: 0 8px 32px rgba(0,0,0,.14);
-}
-.km-close {
-  position: absolute; top: 12px; right: 12px;
-  background: #f5f5f7; border: none; border-radius: 100px;
-  color: #6e6e73; font-size: 16px; width: 30px; height: 30px;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-}
-.km-title { font-size: 18px; font-weight: 600; color: #1a1a2e; margin-bottom: 16px; }
-.km-current {
-  background: #f0fff4; border: 1px solid #c3e6cb; border-radius: 8px;
-  padding: 10px 13px; font-size: 12px; color: #28a745;
-  margin-bottom: 14px; font-family: monospace; word-break: break-all;
+    // Setup: no PIN yet
+    if (setting) return (
+      <PinSetup onDone={(p) => { savePin(p); setSetting(false); if (pending) { pending.cb(); setPending(null); } }} onCancel={() => { setSetting(false); setPending(null); }} />
+    );
+
+    if (!pending) return null;
+
+    return (
+      <PinVerify pin={pin} onSuccess={() => { pending.cb(); setPending(null); }} onCancel={() => setPending(null)} />
+    );
+  }
+
+  return { guard, PinGate };
 }
 
-/* PAGES */
-.page { animation: fadeUp .25s ease both; padding-bottom: 60px; }
-.eyebrow { font-size: 11px; letter-spacing: .25em; text-transform: uppercase; color: #dc3545; margin-bottom: 10px; font-weight: 600; }
-.big-title { font-family: 'Bebas Neue', sans-serif; font-size: clamp(40px, 7vw, 76px); line-height: .92; color: #1a1a2e; margin-bottom: 8px; }
-.big-title em { color: #dc3545; font-style: normal; }
-
-/* SEARCH */
-.s-hero {
-  padding: 52px 24px 36px; text-align: center;
-  border-bottom: 1px solid #e5e5ea; background: #fff;
-}
-.s-sub { font-size: 15px; color: #6e6e73; max-width: 380px; margin: 0 auto; line-height: 1.65; }
-.s-form { max-width: 560px; margin: 32px auto 0; padding: 0 20px; display: grid; gap: 12px; }
-.field { display: flex; flex-direction: column; gap: 5px; }
-.status-bar {
-  background: #fff8f8; border: 1px solid #f5a0a8; border-radius: 8px;
-  color: #dc3545; font-size: 13px; padding: 10px 14px; text-align: center;
-  font-style: italic; animation: pulse 1.5s ease-in-out infinite; margin-top: 10px;
-}
-.err-bar {
-  background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 8px;
-  color: #c82333; font-size: 13px; padding: 10px 14px; text-align: center; margin-top: 10px;
-}
-
-/* RESULT */
-.result { max-width: 720px; margin: 28px auto 0; padding: 0 20px; animation: fadeUp .28s ease both; }
-.rcard {
-  background: #fff; border: 1px solid #e5e5ea; border-radius: 12px;
-  padding: 24px 28px; display: flex; flex-direction: column; gap: 14px;
-  box-shadow: 0 2px 8px rgba(0,0,0,.06);
-}
-.rheader { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
-.rtitle { font-family: 'Bebas Neue', sans-serif; font-size: clamp(24px, 4vw, 38px); line-height: 1; letter-spacing: .03em; color: #1a1a2e; }
-.svc-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  border-radius: 100px; padding: 4px 12px 4px 8px;
-  border: 1px solid #e5e5ea; background: #fff; flex-shrink: 0;
-}
-.svc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.svc-name { font-size: 12px; color: #6e6e73; font-weight: 500; }
-.rmeta { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-.tag {
-  background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 4px;
-  color: #dc3545; font-size: 10px; font-weight: 600; letter-spacing: .1em;
-  padding: 3px 8px; text-transform: uppercase;
-}
-.ytag {
-  background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 4px;
-  color: #6e6e73; font-size: 10px; font-weight: 600; letter-spacing: .1em;
-  padding: 3px 8px; text-transform: uppercase;
-}
-.rdesc {
-  font-size: 14px; line-height: 1.75; color: #444;
-  border-left: 3px solid #dc3545;
-  padding: 10px 14px; background: #fff8f8; border-radius: 0 6px 6px 0;
-}
-.rratings { display: flex; gap: 10px; flex-wrap: wrap; }
-.rbox {
-  background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 8px;
-  padding: 12px 16px; display: flex; align-items: center; gap: 10px;
-  flex: 1; min-width: 120px;
-}
-.ricon { font-size: 22px; line-height: 1; }
-.rl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #aaa; margin-bottom: 2px; font-weight: 600; }
-.rv { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: .04em; line-height: 1; }
-.rv.imdb { color: #f5a623; } .rv.rt { color: #fa320a; } .rv.none { color: #ccc; font-size: 15px; }
-.rlinks { display: flex; gap: 8px; flex-wrap: wrap; }
-.lb {
-  display: inline-flex; align-items: center; gap: 5px; border-radius: 7px;
-  font-size: 13px; font-weight: 500; padding: 8px 14px;
-  text-decoration: none; transition: all .15s; cursor: pointer; border: none;
-}
-.lb:hover { opacity: .85; }
-.lb.primary { background: #dc3545; color: #fff; }
-.lb.sec { background: #fff; border: 1.5px solid #e5e5ea; color: #444; }
-.lb.save { background: #fff; border: 1.5px solid #e5e5ea; color: #6e6e73; }
-.lb.saved { background: #f0fff4; border-color: #c3e6cb; color: #28a745; }
-.rfooter { font-size: 11px; color: #bbb; letter-spacing: .04em; padding-top: 2px; }
-
-/* LIBRARY */
-.lhdr {
-  padding: 36px 24px 22px; border-bottom: 1px solid #e5e5ea; background: #fff;
-  display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap;
-}
-.ltitle { font-family: 'Bebas Neue', sans-serif; font-size: clamp(28px, 4vw, 46px); line-height: .92; color: #1a1a2e; }
-.lcount { color: #aaa; font-size: 12px; margin-top: 4px; }
-.controls { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-.si {
-  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px;
-  color: #1a1a2e; font-family: 'Inter', sans-serif; font-size: 13px;
-  padding: 8px 13px; outline: none; width: 195px;
-}
-.si:focus { border-color: #dc3545; }
-.si::placeholder { color: #bbb; }
-.fb {
-  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 8px;
-  color: #6e6e73; font-family: 'Inter', sans-serif; font-size: 12px;
-  font-weight: 500; padding: 7px 12px; cursor: pointer; transition: all .15s; white-space: nowrap;
-}
-.fb:hover { background: #f5f5f7; color: #1a1a2e; }
-.fb.on { background: #fff0f1; border-color: #f5a0a8; color: #dc3545; }
-.lbody { padding: 20px 24px 0; }
-.empty { text-align: center; padding: 52px 20px; }
-.empty-ico { font-size: 44px; margin-bottom: 12px; opacity: .4; }
-.empty h3 { font-size: 20px; font-weight: 600; color: #aaa; margin-bottom: 6px; }
-.empty p { font-size: 14px; color: #bbb; line-height: 1.6; }
-.lib-list { display: flex; flex-direction: column; gap: 8px; }
-.lrow {
-  background: #fff; border: 1.5px solid #e5e5ea; border-radius: 10px;
-  padding: 16px 18px; display: flex; gap: 14px; cursor: pointer;
-  transition: box-shadow .15s, border-color .15s;
-}
-.lrow:hover { border-color: #f5a0a8; box-shadow: 0 3px 12px rgba(220,53,69,.08); }
-.lrow-accent { width: 4px; border-radius: 3px; align-self: stretch; flex-shrink: 0; min-height: 40px; }
-.lrow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.lrow-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.lrow-title { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: .03em; color: #1a1a2e; line-height: 1; }
-.lrow-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.lrow-year { font-size: 11px; color: #aaa; font-weight: 500; }
-.lrow-genre { font-size: 10px; color: #dc3545; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; background: #fff0f1; border-radius: 4px; padding: 2px 6px; }
-.lrow-desc { font-size: 13px; color: #6e6e73; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.lrow-enr { font-size: 12px; color: #f5a623; font-style: italic; animation: pulse 1.5s ease-in-out infinite; }
-.lrow-right { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; flex-shrink: 0; gap: 8px; min-width: 130px; }
-.lrow-svc { font-size: 10px; color: #6e6e73; letter-spacing: .06em; text-transform: uppercase; background: #f5f5f7; border-radius: 100px; padding: 4px 10px; white-space: nowrap; font-weight: 500; }
-.lrow-ratings { display: flex; gap: 8px; align-items: center; }
-.lrow-r { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 3px; white-space: nowrap; }
-.lrow-r.imdb { color: #f5a623; } .lrow-r.rt { color: #fa320a; }
-.lrow-btns { display: flex; align-items: center; gap: 7px; }
-.lrow-watch {
-  background: #dc3545; border-radius: 6px; color: #fff;
-  font-size: 12px; font-weight: 600; padding: 6px 12px;
-  text-decoration: none; transition: background .15s; white-space: nowrap;
-}
-.lrow-watch:hover { background: #c82333; }
-.lrow-del {
-  background: none; border: none; color: #ccc; font-size: 15px;
-  cursor: pointer; padding: 4px 6px; border-radius: 5px; transition: all .15s;
-}
-.lrow-del:hover { color: #dc3545; background: #fff0f1; }
-
-/* DETAIL MODAL */
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 200;
-  background: rgba(0,0,0,.35); backdrop-filter: blur(8px);
-  display: flex; align-items: center; justify-content: center; padding: 16px;
-  animation: fadeUp .18s ease;
-}
-.modal {
-  background: #fff; border-radius: 14px; padding: 28px;
-  max-width: 620px; width: 100%; max-height: 90vh; overflow-y: auto;
-  position: relative; box-shadow: 0 8px 40px rgba(0,0,0,.14);
-}
-.modal-close {
-  position: absolute; top: 14px; right: 14px;
-  background: #f5f5f7; border: none; border-radius: 100px;
-  color: #6e6e73; font-size: 16px; width: 30px; height: 30px;
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-}
-.modal-close:hover { background: #e5e5ea; }
-.modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding-right: 36px; }
-.modal-title { font-family: 'Bebas Neue', sans-serif; font-size: clamp(24px, 4vw, 34px); letter-spacing: .03em; color: #1a1a2e; line-height: 1.05; }
-.modal-body { display: flex; flex-direction: column; gap: 14px; }
-.modal-footer { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e5e5ea; font-size: 11px; color: #bbb; }
-
-/* IMPORT */
-.ip { padding: 36px 20px 60px; max-width: 860px; margin: 0 auto; }
-.imp-card { background: #fff; border: 1.5px solid #e5e5ea; border-radius: 10px; padding: 20px 24px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
-.prog-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.prog-lbl { font-size: 16px; font-weight: 600; color: #1a1a2e; display: flex; align-items: center; }
-.prog-n { font-family: 'Bebas Neue', sans-serif; font-size: 26px; color: #dc3545; }
-.bar-bg { background: #f5f5f7; border-radius: 100px; height: 5px; overflow: hidden; margin-bottom: 8px; }
-.bar { height: 100%; background: linear-gradient(90deg, #dc3545, #f5a0a8); border-radius: 100px; transition: width .4s ease; }
-.prog-sub { font-size: 12px; color: #aaa; }
-.brow { display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
-.bp { font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 100px; border: 1.5px solid transparent; display: flex; align-items: center; gap: 3px; }
-.bp.pending { background: #f5f5f7; border-color: #e5e5ea; color: #aaa; }
-.bp.running { background: #fff0f1; border-color: #f5a0a8; color: #dc3545; animation: pulse 1.2s ease-in-out infinite; }
-.bp.done { background: #f0fff4; border-color: #c3e6cb; color: #28a745; }
-.bp.error { background: #fff0f1; border-color: #f5a0a8; color: #c82333; }
-.done-card { background: #f0fff4; border: 1.5px solid #c3e6cb; border-radius: 10px; padding: 24px; margin-bottom: 14px; text-align: center; }
-.done-ico { font-size: 40px; margin-bottom: 8px; }
-.done-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; color: #28a745; margin-bottom: 4px; }
-.done-sub { font-size: 13px; color: #6e6e73; line-height: 1.6; }
-.errs { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-.ei { background: #fff0f1; border: 1px solid #f5a0a8; border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #c82333; font-family: monospace; word-break: break-word; }
-`;
-
-// ─── Onboarding ────────────────────────────────────────────────────────────
-function Onboarding({ onDone }) {
+// --- PIN Setup modal ------------------------------------------------------
+function PinSetup({ onDone, onCancel }) {
+  const [step, setStep] = useState(1); // 1=enter, 2=confirm
+  const [first, setFirst] = useState("");
   const [val, setVal] = useState("");
   const [err, setErr] = useState("");
 
   function submit() {
-    const t = val.trim();
-    if (!t.startsWith("sk-ant-")) { setErr("Sleutel moet beginnen met sk-ant-"); return; }
-    setKey(t);
-    onDone(t);
+    if (val.length < 4) { setErr("Minimaal 4 cijfers"); return; }
+    if (step === 1) { setFirst(val); setVal(""); setStep(2); setErr(""); return; }
+    if (val !== first) { setErr("Pincode komt niet overeen"); setVal(""); return; }
+    onDone(val);
   }
 
-  return (
-    <>
-      <style>{CSS}</style>
-      <div className="onboard">
-        <div className="ob-card">
-          <div className="ob-icon">🎬</div>
-          <div className="ob-title">SERIE<em>INFO</em></div>
-          <p className="ob-sub">
-            Je hebt een <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">Anthropic API-sleutel</a> nodig.
-            Die wordt eenmalig opgeslagen in jouw browser.
-          </p>
-          <div className="ob-steps">
-            <div className="step">
-              <div className="step-n">1</div>
-              <div className="step-text">Ga naar <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">console.anthropic.com</a> en maak een gratis account.</div>
-            </div>
-            <div className="step">
-              <div className="step-n">2</div>
-              <div className="step-text">Klik op <strong>API Keys → Create Key</strong> en kopieer de sleutel.</div>
-            </div>
-            <div className="step">
-              <div className="step-n">3</div>
-              <div className="step-text">Plak hieronder. Kosten: <strong>~€0,01 per zoekopdracht</strong>.</div>
-            </div>
-          </div>
-          <div>
-            <label className="flabel">Jouw API-sleutel</label>
-            <input
-              className="finput"
-              type="password"
-              placeholder="sk-ant-api03-..."
-              value={val}
-              onChange={e => { setVal(e.target.value); setErr(""); }}
-              onKeyDown={e => e.key === "Enter" && submit()}
-              autoFocus
-            />
-            {err && <div className="ob-err">⚠️ {err}</div>}
-            <div className="key-note">Wordt alleen opgeslagen in jouw browser (localStorage). Nooit verstuurd naar een server.</div>
-          </div>
-          <button className="btn-red" onClick={submit} style={{ width: "100%", marginTop: 16 }}>
-            STARTEN →
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ─── Key modal ─────────────────────────────────────────────────────────────
-function KeyModal({ current, onSave, onClose }) {
-  const [val, setVal] = useState("");
-
-  function submit() {
-    const t = val.trim();
-    if (!t.startsWith("sk-ant-")) { alert("Sleutel moet beginnen met sk-ant-"); return; }
-    setKey(t); onSave(t); onClose();
-  }
-
-  return (
-    <div className="mo-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="km">
-        <button className="km-close" onClick={onClose}>✕</button>
-        <div className="km-title">🔑 API-sleutel wijzigen</div>
-        {current && <div className="km-current">Actief: {current.slice(0, 24)}…</div>}
-        <div>
-          <label className="flabel">Nieuwe sleutel</label>
-          <input className="finput" type="password" placeholder="sk-ant-api03-..."
-            value={val} onChange={e => setVal(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && submit()} autoFocus />
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button className="btn-red" style={{ fontSize: 14 }} onClick={submit}>Opslaan</button>
-          {current && (
-            <button className="btn-ghost" onClick={() => { delKey(); onSave(""); onClose(); }}>
-              Verwijder
-            </button>
-          )}
+  const content = (
+    <div className="pin-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="pin-modal">
+        <div className="pin-title">[PIN] Pincode instellen</div>
+        <div className="pin-sub">{step === 1 ? "Kies een pincode van minimaal 4 cijfers." : "Bevestig de pincode."}</div>
+        <input className="pin-setup-input" type="password" inputMode="numeric" maxLength={8}
+          placeholder="****" value={val} autoFocus
+          onChange={e => { setVal(e.target.value.replace(/\D/g, "")); setErr(""); }}
+          onKeyDown={e => e.key === "Enter" && submit()} />
+        {err && <div className="pin-err">{err}</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn-primary" style={{ flex: 1 }} onClick={submit}>{step === 1 ? "Volgende" : "Opslaan"}</button>
+          <button className="btn-secondary" onClick={onCancel}>Annuleer</button>
         </div>
       </div>
     </div>
   );
+  return createPortal(content, document.body);
 }
 
-// ─── Detail modal ──────────────────────────────────────────────────────────
+// --- PIN Verify modal -----------------------------------------------------
+function PinVerify({ pin, onSuccess, onCancel }) {
+  const [input, setInput] = useState("");
+  const [err, setErr] = useState(false);
+
+  function press(d) {
+    if (input.length >= pin.length) return;
+    const next = input + d;
+    setInput(next);
+    setErr(false);
+    if (next.length === pin.length) {
+      if (next === pin) { setTimeout(onSuccess, 120); }
+      else { setTimeout(() => { setInput(""); setErr(true); }, 300); }
+    }
+  }
+
+  const dots = Array.from({ length: pin.length }, (_, i) => (
+    <div key={i} className={"pin-dot" + (input.length > i ? (err ? " error" : " filled") : "")} />
+  ));
+
+  const content = (
+    <div className="pin-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="pin-modal">
+        <div className="pin-title">[PIN] Pincode vereist</div>
+        <div className="pin-sub">Voer de pincode in om door te gaan.</div>
+        <div className="pin-dots">{dots}</div>
+        <div className="pin-grid">
+          {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} className="pin-btn" onClick={() => press(String(n))}>{n}</button>)}
+          <div />
+          <button className="pin-btn" onClick={() => press("0")}>0</button>
+          <button className="pin-btn" onClick={() => setInput(i => i.slice(0,-1))}>Del</button>
+        </div>
+        {err && <div className="pin-err">Onjuiste pincode, probeer opnieuw.</div>}
+        <button className="pin-clear" onClick={onCancel}>Annuleer</button>
+      </div>
+    </div>
+  );
+  return createPortal(content, document.body);
+}
+
+// --- Detail Modal (via Portal  -  altijd zichtbaar in viewport) -------------
 function DetailModal({ item, onClose, onDelete }) {
-  return (
+  const { guard, PinGate } = usePinGuard();
+
+  // Vergrendel scrollen en scroll naar boven zodra modal opent
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  const content = (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
-        <button className="modal-close" onClick={onClose}>✕</button>
+        <button className="modal-close" onClick={onClose}>x</button>
         <div className="modal-header">
           <div className="modal-title">{item.title}</div>
           <div className="svc-chip">
@@ -591,100 +444,464 @@ function DetailModal({ item, onClose, onDelete }) {
           </div>
           {item.description && <p className="rdesc">{item.description}</p>}
           <div className="rratings">
-            <div className="rbox">
-              <span className="ricon">⭐</span>
-              <div><div className="rl">IMDb</div><div className={"rv " + (item.imdb_rating ? "imdb" : "none")}>{item.imdb_rating || "N/B"}</div></div>
-            </div>
-            <div className="rbox">
-              <span className="ricon">🍅</span>
-              <div><div className="rl">Rotten Tomatoes</div><div className={"rv " + (item.rt_rating ? "rt" : "none")}>{item.rt_rating || "N/B"}</div></div>
-            </div>
+            <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
+              {/* RT verwijderd */}
           </div>
           <div className="rlinks">
-            {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {item.streaming_service}</a>}
+            {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">Bekijk op {item.streaming_service}</a>}
             {item.imdb_url && <a href={item.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
-            {item.rt_url && <a href={item.rt_url} target="_blank" rel="noopener noreferrer" className="lb sec">🍅 RT</a>}
-            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }}
-              onClick={() => { onDelete(item.id); onClose(); }}>
-              🗑 Verwijder
-            </button>
+              {/* RT link verwijderd */}
+            <button className="lb sec" style={{ color: "#dc3545", borderColor: "#f5a0a8" }} onClick={() => guard(() => { onDelete(item.id); onClose(); })}>[del] Verwijder</button>
           </div>
         </div>
-        <div className="modal-footer">
-          Opgeslagen op {new Date(item.savedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}
-        </div>
+        <div className="modal-footer">Opgeslagen op {new Date(item.savedAt).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" })}</div>
       </div>
     </div>
   );
+
+  // Render buiten de DOM-boom  -  altijd boven alles, ongeacht scrollpositie
+  return <>
+    {createPortal(content, document.body)}
+    <PinGate />
+  </>;
 }
 
-// ─── Library page ──────────────────────────────────────────────────────────
-function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
+
+// --- Extract IMDb title ID from URL --------------------------------------
+function extractImdbId(url) {
+  const m = (url || "").match(/tt\d{7,}/);
+  return m ? m[0] : null;
+}
+
+// --- Extract TMDB TV ID from URL ------------------------------------------
+function extractTmdbId(url) {
+  const m = (url || "").match(/\/tv\/([0-9]+)/);
+  return m ? m[1] : null;
+}
+
+// --- Fetch from specific TMDB ID -----------------------------------------
+async function fetchFromTmdbId(tmdbId) {
+  const key = getTmdbKey();
+  if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
+
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+  const base = "https://api.themoviedb.org/3/tv/" + tmdbId;
+
+  const [det, ext] = await Promise.all([
+    fetch(base + "?language=en-US", { headers }).then(r => r.json()),
+    fetch(base + "/external_ids",   { headers }).then(r => r.json()),
+  ]);
+
+  if (det.success === false) throw new Error("Serie niet gevonden op TMDB (ID " + tmdbId + ")");
+
+  const year    = det.first_air_date ? det.first_air_date.slice(0, 4) : null;
+  const endYear = det.last_air_date  ? det.last_air_date.slice(0, 4)  : null;
+  const yearStr = year && endYear && endYear !== year ? year + "-" + endYear : year;
+  const imdbId  = ext.imdb_id || null;
+
+  const voteAvg = det.vote_average || null;
+  return {
+    title:       det.name || null,
+    year:        yearStr,
+    genres:      (det.genres || []).map(g => g.name),
+    description: det.overview || null,
+    imdb_rating: null,
+    tmdb_rating: voteAvg ? voteAvg.toFixed(1) + "/10" : null,
+    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:  det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    source:      "tmdb",
+  };
+}
+
+// --- Fetch series data using IMDb URL -------------------------------------
+async function fetchFromImdbUrl(imdbUrl, fallbackTitle) {
+  const imdbId = extractImdbId(imdbUrl);
+
+  const userMsg = imdbId
+    ? 'Find the TV series with IMDb ID ' + imdbId + '.' + (fallbackTitle ? ' Title hint: "' + fallbackTitle + '".' : '')
+    : 'Find the TV series at IMDb URL: ' + imdbUrl + '.' + (fallbackTitle ? ' Title hint: "' + fallbackTitle + '".' : '');
+
+  const system =
+    'You are a JSON-only API. You MUST respond with a single raw JSON object and nothing else. ' +
+    'No explanation, no markdown, no code fences. Just the JSON object starting with { and ending with }.';
+
+  const prompt =
+    userMsg + '\n\n' +
+    'Return this JSON object with accurate data:\n' +
+    '{ "title": "...", "year": "YYYY or YYYY-YYYY or null", "genres": ["..."], ' +
+    '"desc": "2-3 sentence English plot description", ' +
+    '"imdb": "X.X/10 or null", "imdb_url": "' + imdbUrl + '" }';
+
+  const text = await claude([{ role: "user", content: prompt }], 500, system);
+
+  // Try to extract JSON even if there's surrounding text
+  const s = text.indexOf("{");
+  const e = text.lastIndexOf("}");
+  if (s === -1 || e === -1 || e <= s) {
+    throw new Error("AI gaf geen JSON terug. Antwoord: " + text.slice(0, 100));
+  }
+  return JSON.parse(text.slice(s, e + 1));
+}
+
+// --- Single series AI re-search -------------------------------------------
+async function researchSeries(title, streamingService) {
+  const prompt =
+    'You are a TV series expert. Find accurate information for the TV series "' + title + '" available on ' + streamingService + '.\n\n' +
+    'Return ONLY a raw JSON object:\n' +
+    '{"year":"YYYY or YYYY-YYYY or null","genres":["string"],' +
+    '"desc":"2-3 sentences English description of the actual plot","imdb":"X.X/10 or null",' +
+    '"imdb_url":"https://www.imdb.com/title/ttXXXXXXX/ or null"}\n\n' +
+    'Be accurate. If uncertain about a field return null. Start with { and end with }.';
+
+  const text = await claude([{ role: "user", content: prompt }], 600, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
+  return parseJsonObject(text);
+}
+
+// --- Edit Modal ------------------------------------------------------------
+function EditModal({ item, onSave, onClose }) {
+  const { guard, PinGate } = usePinGuard();
+  const [form, setForm] = useState({
+    year:        item.year        || "",
+    genres:      (item.genres || []).join(", "),
+    description: item.description || "",
+    imdb_rating: item.imdb_rating || "",
+    tmdb_rating: item.tmdb_rating || "",
+    imdb_url:    item.imdb_url    || "",
+  });
+  const [searching,     setSearching]     = useState(false);
+  const [searchErr,     setSearchErr]     = useState("");
+  const [searchOk,      setSearchOk]      = useState(false);
+  const [imdbFetching,  setImdbFetching]  = useState(false);
+  const [imdbFetchErr,  setImdbFetchErr]  = useState("");
+  const [imdbFetchOk,   setImdbFetchOk]   = useState(false);
+  const [tmdbUrl,       setTmdbUrl]       = useState("");
+  const [tmdbFetching,  setTmdbFetching]  = useState(false);
+  const [tmdbFetchErr,  setTmdbFetchErr]  = useState("");
+  const [tmdbFetchOk,   setTmdbFetchOk]   = useState(false);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  async function doResearch() {
+    setSearching(true); setSearchErr(""); setSearchOk(false);
+    try {
+      const data = await enrichOne(item.title, item.streaming_service);
+      setForm(f => ({
+        ...f,
+        year:        data.year        || f.year,
+        genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
+        description: data.description || f.description,
+        tmdb_rating: data.tmdb_rating || f.tmdb_rating,
+        imdb_url:    data.imdb_url    || f.imdb_url,
+      }));
+      const src = data.source === "tmdb" ? "v Gevonden via TMDB" : "v Gevonden via AI";
+      setSearchOk(src);
+    } catch (e) {
+      setSearchErr(e.message || "Zoeken mislukt");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function doImdbFetch() {
+    if (!form.imdb_url.trim()) return;
+    setImdbFetching(true); setImdbFetchErr(""); setImdbFetchOk(false);
+    try {
+      const ai = await fetchFromImdbUrl(form.imdb_url.trim(), item.title);
+      setForm(f => ({
+        ...f,
+        year:        ai.year  || f.year,
+        genres:      Array.isArray(ai.genres) && ai.genres.length ? ai.genres.join(", ") : f.genres,
+        description: ai.desc  || f.description,
+        imdb_rating: ai.imdb  || f.imdb_rating,
+        imdb_url:    form.imdb_url.trim(),
+      }));
+      setImdbFetchOk(true);
+    } catch (e) { setImdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setImdbFetching(false); }
+  }
+
+  async function doTmdbFetch() {
+    const id = extractTmdbId(tmdbUrl.trim());
+    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL"); return; }
+    setTmdbFetching(true); setTmdbFetchErr(""); setTmdbFetchOk(false);
+    try {
+      const data = await fetchFromTmdbId(id);
+      setForm(f => ({
+        ...f,
+        year:        data.year        || f.year,
+        genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
+        description: data.description || f.description,
+        imdb_url:    data.imdb_url    || f.imdb_url,
+        tmdb_rating: data.tmdb_rating || f.tmdb_rating,
+      }));
+      setTmdbFetchOk("v Gevonden: " + (data.title || "onbekend") + (data.year ? " (" + data.year + ")" : ""));
+    } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setTmdbFetching(false); }
+  }
+
+  function handleSave() {
+    guard(() => {
+      onSave({
+        ...item,
+        year:        form.year        || null,
+        genres:      form.genres ? form.genres.split(",").map(g => g.trim()).filter(Boolean) : [],
+        description: form.description || null,
+        imdb_rating: form.imdb_rating || null,
+        imdb_url:    form.imdb_url    || null,
+        tmdb_rating: form.tmdb_rating || null,
+        enriched:    true,
+      });
+      onClose();
+    });
+  }
+
+  const inp = (label, key) => (
+    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+      <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>{label}</label>
+      <input
+        style={{ background:"#f5f5f7", border:"1.5px solid #e5e5ea", borderRadius:8,
+                 color:"#1a1a2e", fontFamily:"Inter,sans-serif", fontSize:14,
+                 padding:"9px 12px", outline:"none", width:"100%" }}
+        value={form[key]}
+        onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+      />
+    </div>
+  );
+
+  const content = (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth:660, display:"flex", flexDirection:"column", gap:0 }}>
+
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between",
+                      gap:12, marginBottom:16, paddingRight:36 }}>
+          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"clamp(22px,3vw,32px)",
+                        letterSpacing:".03em", color:"#1a1a2e", lineHeight:1.05 }}>
+            {item.title}
+          </div>
+          <div className="svc-chip">
+            <div className="svc-dot" style={{ background: svcColor(item.streaming_service) }} />
+            <span className="svc-name">{item.streaming_service}</span>
+          </div>
+        </div>
+        <button className="modal-close" onClick={onClose}>x</button>
+
+        {/* AI re-search  -  always visible at top */}
+        <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:10,
+                      padding:"14px 16px", marginBottom:18,
+                      display:"flex", alignItems:"center", justifyContent:"space-between",
+                      gap:12, flexWrap:"wrap" }}>
+          <div>
+            <div style={{ fontSize:14, fontWeight:600, color:"#1a1a2e", marginBottom:3 }}>
+              [zoek] AI Herzoeken
+            </div>
+            <div style={{ fontSize:12, color:"#6e6e73" }}>
+              Haal automatisch nieuwe gegevens op voor deze serie
+            </div>
+            {searchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:4 }}>! {searchErr}</div>}
+            {searchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:4 }}>{searchOk}</div>}
+          </div>
+          <button
+            onClick={doResearch}
+            disabled={searching}
+            style={{ background: searching ? "#b8d4f0" : "#0066cc", border:"none", borderRadius:7,
+                     color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                     padding:"9px 18px", cursor: searching ? "not-allowed" : "pointer",
+                     display:"flex", alignItems:"center", gap:6, flexShrink:0 }}
+          >
+            {searching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Zoeken...</> : "Zoek opnieuw"}
+          </button>
+        </div>
+
+        {/* Editable fields */}
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+
+          {/* TMDB URL lookup */}
+          <div style={{ background:"#f0f7ff", border:"1.5px solid #b8d4f0", borderRadius:9, padding:"12px 14px" }}>
+            <div style={{ fontSize:12, fontWeight:600, color:"#1a1a2e", marginBottom:6 }}>
+              [film] TMDB URL <span style={{ fontWeight:400, color:"#6e6e73" }}> -  plak de themoviedb.org URL om gegevens op te halen</span>
+            </div>
+            <div style={{ display:"flex", gap:7, alignItems:"center", flexWrap:"wrap" }}>
+              <input
+                style={{ flex:1, minWidth:200, background:"#fff", border:"1.5px solid #b8d4f0",
+                         borderRadius:7, color:"#1a1a2e", fontFamily:"Inter,sans-serif",
+                         fontSize:13, padding:"8px 11px", outline:"none" }}
+                placeholder="https://www.themoviedb.org/tv/262262-under-salt-marsh"
+                value={tmdbUrl}
+                onChange={e => { setTmdbUrl(e.target.value); setTmdbFetchErr(""); setTmdbFetchOk(false); }}
+                onKeyDown={e => e.key === "Enter" && doTmdbFetch()}
+              />
+              <button onClick={doTmdbFetch} disabled={tmdbFetching || !tmdbUrl}
+                style={{ background: !tmdbUrl ? "#ccc" : tmdbFetching ? "#7bb3e0" : "#0066cc",
+                         border:"none", borderRadius:7, color:"#fff", fontFamily:"Inter,sans-serif",
+                         fontSize:13, fontWeight:600, padding:"8px 16px",
+                         cursor: !tmdbUrl || tmdbFetching ? "not-allowed" : "pointer",
+                         display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen...</> : "[film] Haal op via TMDB"}
+              </button>
+            </div>
+            {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
+            {tmdbFetchOk  && <div style={{ fontSize:11, color:"#28a745", marginTop:5 }}>{tmdbFetchOk}</div>}
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {inp("Jaar", "year")}
+            {inp("Genres (komma-gescheiden)", "genres")}
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+            <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>Omschrijving</label>
+            <textarea rows={3}
+              style={{ background:"#f5f5f7", border:"1.5px solid #e5e5ea", borderRadius:8,
+                       color:"#1a1a2e", fontFamily:"Inter,sans-serif", fontSize:14,
+                       padding:"9px 12px", outline:"none", resize:"vertical", lineHeight:1.6, width:"100%" }}
+              value={form.description}
+              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+            />
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {inp("TMDB score (bv. 7.4/10)", "tmdb_rating")}
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase",
+                              color: form.imdb_url ? "#6e6e73" : "#dc3545", fontWeight:600 }}>
+                IMDb URL{!form.imdb_url && " ! ontbreekt"}
+              </label>
+              <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+                <input
+                  style={{ background: form.imdb_url ? "#f5f5f7" : "#fff8f8",
+                           border: "1.5px solid " + (form.imdb_url ? "#e5e5ea" : "#f5a0a8"),
+                           borderRadius:8, color:"#1a1a2e", fontFamily:"Inter,sans-serif",
+                           fontSize:13, padding:"9px 12px", outline:"none", flex:1, minWidth:160 }}
+                  placeholder="https://www.imdb.com/title/tt..."
+                  value={form.imdb_url}
+                  onChange={e => { setForm(f => ({ ...f, imdb_url: e.target.value })); setImdbFetchErr(""); setImdbFetchOk(false); }}
+                  onKeyDown={e => e.key === "Enter" && doImdbFetch()}
+                />
+                {form.imdb_url && (
+                  <button onClick={doImdbFetch} disabled={imdbFetching}
+                    style={{ background: imdbFetching ? "#bbb" : "#f5a623", border:"none",
+                             borderRadius:6, color:"#fff", fontFamily:"Inter,sans-serif",
+                             fontSize:12, fontWeight:600, padding:"9px 13px",
+                             cursor: imdbFetching ? "not-allowed" : "pointer",
+                             display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
+                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff", width:11, height:11 }} />Ophalen...</> : "* Haal op"}
+                  </button>
+                )}
+                {form.imdb_url && (
+                  <a href={form.imdb_url} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize:12, color:"#0066cc", whiteSpace:"nowrap", textDecoration:"none", padding:"9px 4px" }}>^</a>
+                )}
+              </div>
+              {imdbFetchErr && <div style={{ fontSize:11, color:"#c82333" }}>! {imdbFetchErr}</div>}
+              {imdbFetchOk  && <div style={{ fontSize:11, color:"#28a745" }}>v Gegevens opgehaald via IMDb ID</div>}
+            </div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          </div>
+        </div>
+
+        {/* Buttons */}
+        <div style={{ display:"flex", gap:8, marginTop:20 }}>
+          <button className="btn-primary" style={{ flex:1 }} onClick={handleSave}>
+            [PIN] Opslaan
+          </button>
+          <button className="btn-secondary" onClick={onClose}>Annuleer</button>
+        </div>
+
+      </div>
+    </div>
+  );
+
+  return <>
+    {createPortal(content, document.body)}
+    <PinGate />
+  </>;
+}
+
+
+// --- Library ---------------------------------------------------------------
+function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdate, onGo }) {
+  const { guard, PinGate } = usePinGuard();
   const [q, setQ] = useState("");
   const [svc, setSvc] = useState("");
   const [sort, setSort] = useState("recent");
+  const [hideWatched, setHideWatched] = useState(false);
   const [sel, setSel] = useState(null);
+  const [editing, setEditing] = useState(null);
 
-  useEffect(() => {
-    if (sel) setSel(library.find(i => i.id === sel.id) || null);
-  }, [library]);
+  useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
+  const watchedCount = library.filter(i => i.watched).length;
   const svcs = [...new Set(library.map(i => i.streaming_service).filter(Boolean))].sort();
-
   let list = library.filter(item => {
     const lq = q.toLowerCase();
-    return (
-      (!lq || item.title?.toLowerCase().includes(lq) ||
-        (item.genres || []).some(g => g.toLowerCase().includes(lq)) ||
-        item.description?.toLowerCase().includes(lq))
+    return (!lq || item.title?.toLowerCase().includes(lq) || (item.genres || []).some(g => g.toLowerCase().includes(lq)) || item.description?.toLowerCase().includes(lq))
       && (!svc || item.streaming_service === svc)
-    );
+      && (!hideWatched || !item.watched);
   });
-
   if (sort === "az") list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-  if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.imdb_rating) || 0) - (parseFloat(a.imdb_rating) || 0));
+  if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.tmdb_rating) || 0) - (parseFloat(a.tmdb_rating) || 0));
 
   return (
     <div className="page">
       <div className="lhdr">
         <div>
           <p className="eyebrow">Jouw collectie</p>
-          <h2 className="ltitle">SERIE<em style={{ color: "#dc3545", fontStyle: "normal" }}>BIBLIOTHEEK</em></h2>
+          <h2 className="ltitle">Mijn <em>Bibliotheek</em></h2>
           <p className="lcount">
             {library.length} series
-            {enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>· AI verrijkt {enrichingIds.size}…</span>}
+            {watchedCount > 0 && <span style={{ color: "#28a745", marginLeft: 8 }}>. {watchedCount} bekeken</span>}
+            {enrichingIds.size > 0 && <span style={{ color: "#f5a623", marginLeft: 8 }}>. AI verrijkt {enrichingIds.size}...</span>}
           </p>
         </div>
         <div className="controls">
-          <input className="si" placeholder="Zoek naam, genre of omschrijving…" value={q} onChange={e => setQ(e.target.value)} />
-          {svcs.map(s => (
-            <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>
-          ))}
-          {[["recent", "Nieuwste"], ["az", "A–Z"], ["imdb", "IMDb"]].map(([v, l]) => (
-            <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>
-          ))}
+          <input className="si" placeholder="Zoek naam, genre of omschrijving..." value={q} onChange={e => setQ(e.target.value)} />
+          {svcs.map(s => <button key={s} className={"fb " + (svc === s ? "on" : "")} onClick={() => setSvc(svc === s ? "" : s)}>{s}</button>)}
+          {[["recent", "Nieuwste"], ["az", "A-Z"], ["imdb", "TMDB v"]].map(([v, l]) =>
+            <button key={v} className={"fb " + (sort === v ? "on" : "")} onClick={() => setSort(v)}>{l}</button>)}
+          <button
+            className={"fb watched-filter " + (hideWatched ? "on" : "")}
+            onClick={() => setHideWatched(h => !h)}
+            title="Bekeken series verbergen"
+          >
+            {hideWatched ? "v Bekeken verborgen" : "[oog] Verberg bekeken"}
+          </button>
         </div>
       </div>
       <div className="lbody">
         {library.length === 0 ? (
           <div className="empty">
-            <div className="empty-ico">🎬</div>
+            <div className="empty-ico">[film]</div>
             <h3>Bibliotheek is leeg</h3>
             <p>Gebruik Import om alle series te laden,<br />of voeg ze toe via Zoeken.</p>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 18, flexWrap: "wrap" }}>
-              <button className="btn-red" onClick={() => onGo("import")}>📥 Importeer lijst</button>
-              <button className="btn-ghost" onClick={() => onGo("search")}>🔍 Zoek serie</button>
+              <button className="btn-primary" onClick={() => onGo("import")}>[in] Importeer lijst</button>
+              <button className="btn-secondary" onClick={() => onGo("search")}>[zoek] Zoek serie</button>
             </div>
           </div>
         ) : list.length === 0 ? (
-          <div className="empty"><div className="empty-ico">🔍</div><h3>Geen resultaten</h3></div>
+          <div className="empty"><div className="empty-ico">[zoek]</div><h3>Geen resultaten</h3>
+            {hideWatched && <p style={{ marginTop: 8 }}>Alle series zijn gemarkeerd als bekeken.<br /><button className="btn-secondary" style={{ marginTop: 12, fontSize: 13 }} onClick={() => setHideWatched(false)}>Toon bekeken series</button></p>}
+          </div>
         ) : (
           <div className="lib-list">
             {list.map(item => {
               const isEnriching = enrichingIds.has(item.id);
               return (
-                <div key={item.id} className="lrow" onClick={() => setSel(item)}>
+                <div key={item.id} className={"lrow " + (item.watched ? "watched" : "")} onClick={() => setSel(item)}>
                   <div className="lrow-accent" style={{ background: svcColor(item.streaming_service) }} />
+                  {/* Checkbox bekeken */}
+                  <input
+                    type="checkbox"
+                    className="watched-cb"
+                    checked={!!item.watched}
+                    title={item.watched ? "Markeer als onbekeken" : "Markeer als bekeken"}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => { e.stopPropagation(); guard(() => onToggleWatched(item.id)); }}
+                  />
                   <div className="lrow-main">
                     <div className="lrow-top">
                       <div className="lrow-title">{item.title}</div>
@@ -693,26 +910,19 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
                         {(item.genres || []).slice(0, 2).map(g => <span key={g} className="lrow-genre">{g}</span>)}
                       </div>
                     </div>
-                    {isEnriching
-                      ? <div className="lrow-enr">⏳ AI verrijkt…</div>
-                      : item.description
-                        ? <div className="lrow-desc">{item.description}</div>
-                        : null}
+                    {isEnriching ? <div className="lrow-enr">... AI verrijkt...</div>
+                      : item.description ? <div className="lrow-desc">{item.description}</div>
+                      : null}
                   </div>
                   <div className="lrow-right">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div className="lrow-svc">{item.streaming_service}</div>
-                      <button className="lrow-del" onClick={e => { e.stopPropagation(); onDelete(item.id); }}>✕</button>
+                      <button className="lrow-del" title="Verwijder" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>x</button>
+                      <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>/</button>
                     </div>
                     <div className="lrow-btns">
-                      {!isEnriching && <>
-                        {item.imdb_rating && <span className="lrow-r imdb">⭐ {item.imdb_rating}</span>}
-                        {item.rt_rating && <span className="lrow-r rt">🍅 {item.rt_rating}</span>}
-                      </>}
-                      {item.streaming_url && (
-                        <a href={item.streaming_url} target="_blank" rel="noopener noreferrer"
-                          className="lrow-watch" onClick={e => e.stopPropagation()}>▶ Bekijk</a>
-                      )}
+                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>[film] {item.tmdb_rating}</span>}</>}
+                      {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>Bekijk</a>}
                     </div>
                   </div>
                 </div>
@@ -722,12 +932,139 @@ function LibraryPage({ library, enrichingIds, onDelete, onGo }) {
         )}
       </div>
       {sel && <DetailModal item={sel} onClose={() => setSel(null)} onDelete={id => { onDelete(id); setSel(null); }} />}
+      {editing && <EditModal item={editing} onSave={onUpdate} onClose={() => setEditing(null)} />}
+      <PinGate />
     </div>
   );
 }
 
-// ─── Search page ───────────────────────────────────────────────────────────
-function SearchPage({ library, onSave }) {
+
+// --- Film Card ----------------------------------------------------------
+function FilmCard({ film, onDelete, onToggleWatched }) {
+  const { guard, PinGate } = usePinGuard();
+
+  function handleDelete() { guard(() => onDelete(film.id)); }
+  function handleWatched() { guard(() => onToggleWatched(film.id)); }
+
+  return (
+    <div className={"film-card" + (film.watched ? " watched" : "")}>
+      {film.poster_url
+        ? <img src={film.poster_url} alt={film.title} className="film-poster" loading="lazy" />
+        : <div className="film-poster-placeholder">[film]</div>
+      }
+      <div className="film-info">
+        <div className="film-title">{film.title}</div>
+        <div className="film-year">{film.year || ""}</div>
+        <div className="film-genres">
+          {(film.genres || []).slice(0, 2).map(g => (
+            <span key={g} className="film-genre">{g}</span>
+          ))}
+        </div>
+        <div className="film-ratings">
+          {film.tmdb_rating && <span className="film-rating tmdb">* {film.tmdb_rating}</span>}
+          {film.imdb_rating && <span className="film-rating imdb">IMDb {film.imdb_rating}</span>}
+        </div>
+        {film.description && <div className="film-desc">{film.description}</div>}
+      </div>
+      <div className="film-actions">
+        <input type="checkbox" className="film-cb" checked={!!film.watched}
+          title={film.watched ? "Markeer als onbekeken" : "Markeer als bekeken"}
+          onChange={handleWatched} />
+        {film.imdb_url && (
+          <a href={film.imdb_url} target="_blank" rel="noopener noreferrer" className="film-imdb-link">
+            IMDb
+          </a>
+        )}
+        <button className="film-del" title="Verwijder" onClick={handleDelete}>x</button>
+      </div>
+      <PinGate />
+    </div>
+  );
+}
+
+// --- Film Library Page --------------------------------------------------
+function FilmLibraryPage({ films, onDelete, onToggleWatched, onGo }) {
+  const [q, setQ]                   = useState("");
+  const [sort, setSort]             = useState("recent");
+  const [hideWatched, setHideWatched] = useState(false);
+
+  const watchedCount = films.filter(f => f.watched).length;
+
+  let list = films.filter(film => {
+    const lq = q.toLowerCase();
+    return (
+      (!lq || film.title?.toLowerCase().includes(lq) ||
+       (film.genres || []).some(g => g.toLowerCase().includes(lq)) ||
+       film.description?.toLowerCase().includes(lq)) &&
+      (!hideWatched || !film.watched)
+    );
+  });
+  if (sort === "az")   list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+  if (sort === "tmdb") list = [...list].sort((a, b) => (parseFloat(b.tmdb_rating) || 0) - (parseFloat(a.tmdb_rating) || 0));
+
+  return (
+    <div className="page">
+      <div className="film-lhdr">
+        <div>
+          <h2 className="film-ltitle">Film<em>Bibliotheek</em></h2>
+          <p className="lcount">
+            {films.length} films
+            {watchedCount > 0 && <span style={{ color:"#16a34a", marginLeft:8 }}>{watchedCount} bekeken</span>}
+          </p>
+        </div>
+        <div className="controls">
+          <input className="si" placeholder="Zoek film, genre..."
+            value={q} onChange={e => setQ(e.target.value)} />
+          {[["recent","Nieuwste"],["az","A-Z"],["tmdb","TMDB"]].map(([v, l]) => (
+            <button key={v} className={"fb" + (sort === v ? " on" : "")} onClick={() => setSort(v)}>{l}</button>
+          ))}
+          <button
+            className={"fb watched-filter" + (hideWatched ? " on" : "")}
+            onClick={() => setHideWatched(h => !h)}>
+            {hideWatched ? "v Verborgen" : "[oog] Verberg bekeken"}
+          </button>
+        </div>
+      </div>
+
+      {films.length === 0 ? (
+        <div className="film-empty">
+          <div style={{ fontSize:52, marginBottom:18, opacity:.35 }}>[film]</div>
+          <h3 style={{ fontFamily:"Playfair Display,serif", fontSize:24, color:"#a8a29e", marginBottom:8 }}>
+            Nog geen films
+          </h3>
+          <p style={{ fontSize:14, color:"#c7c3bf", lineHeight:1.65 }}>
+            Ga naar Zoeken en zoek een film op om te beginnen.
+          </p>
+          <div style={{ marginTop:20 }}>
+            <button className="btn-primary" onClick={() => onGo("search")}>Film zoeken</button>
+          </div>
+        </div>
+      ) : list.length === 0 ? (
+        <div className="film-empty">
+          <div style={{ fontSize:36, marginBottom:12, opacity:.4 }}>[zoek]</div>
+          <h3 style={{ fontFamily:"Playfair Display,serif", fontSize:20, color:"#a8a29e" }}>Geen resultaten</h3>
+          {hideWatched && (
+            <button className="btn-secondary" style={{ marginTop:14 }} onClick={() => setHideWatched(false)}>
+              Toon bekeken films
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="film-grid">
+          {list.map(film => (
+            <FilmCard key={film.id} film={film}
+              onDelete={onDelete} onToggleWatched={onToggleWatched} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Search ----------------------------------------------------------------
+function SearchPage({ library, films, onSave, onSaveFilm }) {
+  const [mode, setMode] = useState("series"); // "series" | "film"
+  const { guard, PinGate } = usePinGuard();
   const [series, setSeries] = useState("");
   const [streaming, setStreaming] = useState("");
   const [loading, setLoading] = useState(false);
@@ -735,73 +1072,138 @@ function SearchPage({ library, onSave }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [imdbUrlOverride, setImdbUrlOverride] = useState("");
+  const [imdbFetching,   setImdbFetching]   = useState(false);
+  const [imdbFetchErr,   setImdbFetchErr]   = useState("");
+  const [tmdbUrlInput,   setTmdbUrlInput]   = useState("");
+  const [tmdbFetching,   setTmdbFetching]   = useState(false);
+  const [tmdbFetchErr,   setTmdbFetchErr]   = useState("");
+  const [tmdbFetchOk,    setTmdbFetchOk]    = useState("");
 
-  const alreadySaved = result
-    ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase())
-    : false;
+  async function fetchFromTmdbUrl() {
+    const id = extractTmdbId(tmdbUrlInput.trim());
+    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL"); return; }
+    setTmdbFetching(true); setTmdbFetchErr(""); setTmdbFetchOk("");
+    try {
+      const data = await fetchFromTmdbId(id);
+      setResult(prev => ({
+        ...(prev || {}),
+        title:             data.title             || prev?.title             || series,
+        year:              data.year              || prev?.year              || null,
+        genres:            data.genres?.length    ? data.genres              : (prev?.genres || []),
+        description:       data.description       || prev?.description       || null,
+        tmdb_rating:       data.tmdb_rating       || prev?.tmdb_rating       || null,
+        imdb_url:          data.imdb_url          || prev?.imdb_url          || null,
+        poster_url:        data.poster_url        || prev?.poster_url        || null,
+        streaming_service: prev?.streaming_service || streaming,
+        streaming_url:     prev?.streaming_url     || null,
+      }));
+      setTmdbFetchOk("v " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
+    } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setTmdbFetching(false); }
+  }
+
+  async function fetchFromUrl() {
+    if (!imdbUrlOverride.trim()) return;
+    setImdbFetching(true); setImdbFetchErr("");
+    try {
+      const ai = await fetchFromImdbUrl(imdbUrlOverride.trim(), result?.title || series);
+      setResult(prev => ({
+        ...(prev || {}),
+        title:          ai.title       || prev?.title || series,
+        year:           ai.year        || prev?.year  || null,
+        genres:         Array.isArray(ai.genres) && ai.genres.length ? ai.genres : (prev?.genres || []),
+        description:    ai.desc        || prev?.description || null,
+        imdb_rating:    ai.imdb        || prev?.imdb_rating || null,
+        imdb_url:       imdbUrlOverride.trim(),
+        streaming_service: prev?.streaming_service || streaming,
+        streaming_url:  prev?.streaming_url || null,
+      }));
+    } catch (e) { setImdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setImdbFetching(false); }
+  }
+
+  const alreadySaved = result ? library.some(i => i.title?.toLowerCase() === result.title?.toLowerCase()) : false;
+
+  function handleSaveToLibrary() {
+    if (alreadySaved) return;
+    const item = {
+      ...result,
+      imdb_url:    imdbUrlOverride || (result ? result.imdb_url : null) || null,
+      tmdb_rating: result ? result.tmdb_rating : null,
+      id: "s" + Date.now(),
+      savedAt: new Date().toISOString(),
+    };
+    guard(() => { onSave(item); setSaved(true); });
+  }
 
   async function doSearch() {
     if (!series.trim()) return;
-    setLoading(true); setError(""); setResult(null); setSaved(false);
-    setStatus("AI zoekt op…");
+    setLoading(true); setError(""); setResult(null); setSaved(false); setStatus("AI zoekt op...");
     try {
       const prompt =
         'Geef informatie over de TV serie "' + series.trim() + '" op streamingdienst "' + (streaming.trim() || "onbekend") + '".\n\n' +
-        'Geef ALLEEN een raw JSON object terug (geen markdown, geen uitleg):\n' +
+        'Geef ALLEEN een raw JSON object terug:\n' +
         '{"title":"string","year":"string of null","genres":["string"],' +
-        '"description":"2-3 zinnen in het Nederlands",' +
-        '"imdb_rating":"X.X/10 of null","imdb_url":"url of null",' +
-        '"rt_rating":"XX% of null","rt_url":"url of null",' +
+        '"description":"2-3 zinnen Nederlands","imdb_rating":"X.X/10 of null",' +
+        '"imdb_url":"full IMDb URL or null",' +
         '"streaming_service":"string","streaming_url":"url of null"}';
-
-      const text = await claude([{ role: "user", content: prompt }], 900);
-      setResult(parseJsonObject(text));
+      const text = await claude([{ role: "user", content: prompt }], 900, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
+      const parsed = parseJsonObject(text);
+      setResult(parsed);
+      setImdbUrlOverride(parsed.imdb_url || "");
       setStatus("");
-    } catch (e) {
-      setError(e.message || "Probeer opnieuw.");
-      setStatus("");
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(e.message || "Probeer opnieuw."); setStatus(""); }
+    finally { setLoading(false); }
   }
 
   return (
     <div className="page">
       <div className="s-hero">
-        <p className="eyebrow">AI-Powered</p>
-        <h1 className="big-title">SERIE<em>INFO</em></h1>
-        <p className="s-sub">Geef een tv-serie en streamingdienst in — AI zoekt alles automatisch op.</p>
+        <div className="s-eyebrow">AI-Powered . TMDB . Gratis</div>
+        <h1 className="s-title">
+          {mode === "series" ? "Ontdek je favoriete series" : "Ontdek je favoriete films"}
+        </h1>
+        <p className="s-sub">
+          {mode === "series"
+            ? "Zoek een tv-serie op en sla op in je persoonlijke bibliotheek."
+            : "Zoek een film op via TMDB en sla op in je filmbibiotheek."}
+        </p>
+        <div className="mode-toggle">
+          <button className={"mode-btn" + (mode === "series" ? " on" : "")} onClick={() => setMode("series")}>
+            Series
+          </button>
+          <button className={"mode-btn" + (mode === "film" ? " on" : "")} onClick={() => setMode("film")}>
+            Films
+          </button>
+        </div>
       </div>
+      {mode === "series" && (
       <div className="s-form">
         <div className="field">
           <label className="flabel">TV Serie</label>
-          <input className="finput" placeholder="bv. Breaking Bad, Succession…"
-            value={series}
-            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); }}
+          <input className="finput" placeholder="bv. Breaking Bad, Succession..." value={series}
+            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); setImdbUrlOverride(""); setTmdbUrlInput(""); setTmdbFetchOk(""); setTmdbFetchErr(""); }}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <div className="field">
           <label className="flabel">Streamingdienst</label>
-          <input className="finput" placeholder="bv. Netflix, Disney+, Prime…"
-            value={streaming}
+          <input className="finput" placeholder="bv. Netflix, Disney+, Prime..." value={streaming}
             onChange={e => setStreaming(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
-        <button className="btn-red" onClick={doSearch} disabled={loading || !series.trim()}>
-          {loading ? <><span className="spin" />Zoeken…</> : "ZOEK INFORMATIE OP"}
+        <button className="btn-primary" onClick={doSearch} disabled={loading || !series.trim()}>
+          {loading ? <><span className="spin" />Zoeken...</> : "ZOEK INFORMATIE OP"}
         </button>
-        {status && <div className="status-bar">🔍 {status}</div>}
-        {error && <div className="err-bar">⚠️ {error}</div>}
+        {status && <div className="status-bar">[zoek] {status}</div>}
+        {error && <div className="err-bar">! {error}</div>}
       </div>
       {result && (
         <div className="result">
-          <div className="rcard">
-            <div className="rheader">
+          <div className="rcard card">
+            <div className="rcard-header">
               <div className="rtitle">{result.title}</div>
-              <div className="svc-chip">
-                <div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} />
-                <span className="svc-name">{result.streaming_service}</span>
-              </div>
+              <div className="svc-chip"><div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} /><span className="svc-name">{result.streaming_service}</span></div>
             </div>
             <div className="rmeta">
               {result.year && <span className="ytag">{result.year}</span>}
@@ -809,178 +1211,381 @@ function SearchPage({ library, onSave }) {
             </div>
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
-              <div className="rbox">
-                <span className="ricon">⭐</span>
-                <div><div className="rl">IMDb</div><div className={"rv " + (result.imdb_rating ? "imdb" : "none")}>{result.imdb_rating || "N/B"}</div></div>
-              </div>
-              <div className="rbox">
-                <span className="ricon">🍅</span>
-                <div><div className="rl">RT</div><div className={"rv " + (result.rt_rating ? "rt" : "none")}>{result.rt_rating || "N/B"}</div></div>
-              </div>
+              <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
             </div>
+
+            {/* TMDB URL ophalen */}
+            <div className="tmdb-block">
+              <div className="tmdb-block-title">[film] TMDB URL</div>
+              <div className="tmdb-block-sub">Plak de themoviedb.org URL om gegevens op te halen</div>
+              <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                <input
+                  className="finput"
+                  style={{ flex:1, minWidth:200, fontSize:13, padding:"9px 12px", background:"#fff", borderColor:"#b8d4f0" }}
+                  placeholder="https://www.themoviedb.org/tv/12345-serie-naam"
+                  value={tmdbUrlInput}
+                  onChange={e => { setTmdbUrlInput(e.target.value); setTmdbFetchErr(""); setTmdbFetchOk(""); }}
+                  onKeyDown={e => e.key === "Enter" && fetchFromTmdbUrl()}
+                />
+                {tmdbUrlInput && (
+                  <button onClick={fetchFromTmdbUrl} disabled={tmdbFetching}
+                    style={{ background: tmdbFetching ? "#7bb3e0" : "#0066cc", border:"none", borderRadius:7,
+                             color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                             padding:"9px 16px", cursor: tmdbFetching ? "not-allowed" : "pointer",
+                             display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                    {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen...</> : "[film] Haal op via TMDB"}
+                  </button>
+                )}
+              </div>
+              {tmdbFetchErr && <div style={{ fontSize:12, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
+              {tmdbFetchOk  && <div style={{ fontSize:12, color:"#28a745", marginTop:5 }}>v {tmdbFetchOk}</div>}
+            </div>
+
+            {/* Bewerkbaar IMDb URL veld met ophalen-knop */}
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              <label className="flabel">IMDb URL
+                {!result.imdb_url && !imdbUrlOverride && (
+                  <span style={{ color:"#dc3545", fontWeight:400, letterSpacing:0, textTransform:"none", marginLeft:6 }}>
+                     -  niet gevonden, voer handmatig in
+                  </span>
+                )}
+              </label>
+              <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                <input
+                  className="finput"
+                  style={{ flex:1, minWidth:200, fontSize:13, padding:"9px 12px",
+                    borderColor: imdbUrlOverride && !imdbUrlOverride.includes("imdb.com") ? "#f5a0a8" : undefined }}
+                  placeholder="https://www.imdb.com/title/tt..."
+                  value={imdbUrlOverride}
+                  onChange={e => { setImdbUrlOverride(e.target.value); setImdbFetchErr(""); }}
+                  onKeyDown={e => e.key === "Enter" && fetchFromUrl()}
+                />
+                {imdbUrlOverride && (
+                  <button
+                    onClick={fetchFromUrl}
+                    disabled={imdbFetching}
+                    style={{ background: imdbFetching ? "#bbb" : "#f5a623", border:"none", borderRadius:7,
+                             color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                             padding:"9px 16px", cursor: imdbFetching ? "not-allowed" : "pointer",
+                             display:"flex", alignItems:"center", gap:5, flexShrink:0 }}>
+                    {imdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen...</> : "* Haal gegevens op"}
+                  </button>
+                )}
+                {imdbUrlOverride && !imdbFetching && (
+                  <a href={imdbUrlOverride} target="_blank" rel="noopener noreferrer"
+                    className="lb sec" style={{ whiteSpace:"nowrap", flexShrink:0, padding:"9px 14px" }}>
+                    Bekijk ^
+                  </a>
+                )}
+              </div>
+              {imdbFetchErr && <div style={{ fontSize:12, color:"#c82333" }}>! {imdbFetchErr}</div>}
+            </div>
+
             <div className="rlinks">
-              {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">▶ Bekijk op {result.streaming_service}</a>}
-              {result.imdb_url && <a href={result.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>}
-              {result.rt_url && <a href={result.rt_url} target="_blank" rel="noopener noreferrer" className="lb sec">🍅 RT</a>}
-              <button
-                className={"lb " + (saved || alreadySaved ? "saved" : "save")}
-                onClick={() => {
-                  if (alreadySaved) return;
-                  onSave({ ...result, id: "s" + Date.now(), savedAt: new Date().toISOString() });
-                  setSaved(true);
-                }}
+              {result.streaming_url && <a href={result.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary">Bekijk op {result.streaming_service}</a>}
+              <button className={"lb " + (saved || alreadySaved ? "saved" : "save")}
+                onClick={handleSaveToLibrary}
                 disabled={saved || alreadySaved}>
-                {saved || alreadySaved ? "✓ Opgeslagen" : "+ Opslaan in bibliotheek"}
+                {saved || alreadySaved ? "v Opgeslagen" : "+ Opslaan in bibliotheek"}
               </button>
             </div>
-            <div className="rfooter">Informatie via Claude AI · IMDb · Rotten Tomatoes</div>
+            <div className="rfooter">Informatie via Claude AI . IMDb</div>
           </div>
         </div>
       )}
+      )} {/* end mode === series */}
+
+      {mode === "film" && (
+        <FilmSearchSection films={films} onSaveFilm={onSaveFilm} guard={guard} />
+      )}
+
+      <PinGate />
     </div>
   );
 }
 
-// ─── Import page ───────────────────────────────────────────────────────────
-function ImportPage({ currentLibrary, onLibraryUpdate }) {
-  const [phase, setPhase] = useState("idle");
-  const [savedCount, setSavedCount] = useState(0);
-  const [enriched, setEnriched] = useState(0);
-  const [bstates, setBstates] = useState(BATCHES.map(() => "pending"));
-  const [errors, setErrors] = useState([]);
-  const running = useRef(false);
+// --- Film Search Section -------------------------------------------------
+function FilmSearchSection({ films, onSaveFilm, guard }) {
+  const [filmTitle, setFilmTitle]     = useState("");
+  const [filmResult, setFilmResult]   = useState(null);
+  const [searching, setSearching]     = useState(false);
+  const [searchErr, setSearchErr]     = useState("");
+  const [saved, setSaved]             = useState(false);
+  const [imdbRating, setImdbRating]   = useState("");
+  const [tmdbUrlInput, setTmdbUrlInput] = useState("");
+  const [tmdbFetching, setTmdbFetching] = useState(false);
+  const [tmdbFetchErr, setTmdbFetchErr] = useState("");
 
+  const alreadySaved = filmResult
+    ? films.some(f => f.title?.toLowerCase() === filmResult.title?.toLowerCase())
+    : false;
+
+  async function doSearch() {
+    if (!filmTitle.trim()) return;
+    setSearching(true); setSearchErr(""); setFilmResult(null); setSaved(false); setImdbRating("");
+    try {
+      const r = await tmdbMovieSearch(filmTitle.trim());
+      if (!r) throw new Error("Film niet gevonden in TMDB. Probeer een TMDB-URL hieronder.");
+      setFilmResult(r);
+    } catch (e) { setSearchErr(e.message || "Zoeken mislukt"); }
+    finally { setSearching(false); }
+  }
+
+  async function doTmdbFetch() {
+    const id = extractTmdbId(tmdbUrlInput.trim());
+    if (!id) { setTmdbFetchErr("Geen TMDB-ID gevonden in de URL"); return; }
+    setTmdbFetching(true); setTmdbFetchErr("");
+    try {
+      const data = await fetchMovieFromTmdbId(id);
+      setFilmResult(data);
+      setSaved(false);
+    } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
+    finally { setTmdbFetching(false); }
+  }
+
+  function handleSave() {
+    if (alreadySaved || !filmResult) return;
+    const item = {
+      ...filmResult,
+      imdb_rating: imdbRating.trim() || null,
+      id: "film" + Date.now(),
+      savedAt: new Date().toISOString(),
+      watched: false,
+    };
+    guard(() => { onSaveFilm(item); setSaved(true); });
+  }
+
+  return (
+    <>
+      <div className="s-form">
+        <div className="field">
+          <label className="flabel">Filmtitel</label>
+          <input className="finput" placeholder="bv. Inception, The Dark Knight..."
+            value={filmTitle}
+            onChange={e => { setFilmTitle(e.target.value); setFilmResult(null); setSaved(false); }}
+            onKeyDown={e => e.key === "Enter" && !searching && doSearch()} />
+        </div>
+        <button className="btn-primary" onClick={doSearch} disabled={searching || !filmTitle.trim()}>
+          {searching ? <><span className="spin" />Zoeken...</> : "Zoek film op"}
+        </button>
+        {searchErr && <div className="err-bar">{searchErr}</div>}
+
+        {/* TMDB URL fallback */}
+        <div className="tmdb-block" style={{ marginTop:8 }}>
+          <div className="tmdb-block-title">[film] TMDB URL</div>
+          <div className="tmdb-block-sub">Niet gevonden? Plak de themoviedb.org/movie URL</div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <input className="finput" style={{ flex:1, fontSize:13, padding:"9px 12px", background:"#fff", borderColor:"#b8d4f0" }}
+              placeholder="https://www.themoviedb.org/movie/27205"
+              value={tmdbUrlInput}
+              onChange={e => { setTmdbUrlInput(e.target.value); setTmdbFetchErr(""); }}
+              onKeyDown={e => e.key === "Enter" && doTmdbFetch()} />
+            {tmdbUrlInput && (
+              <button onClick={doTmdbFetch} disabled={tmdbFetching}
+                style={{ background: tmdbFetching ? "#7bb3e0" : "#0066cc", border:"none", borderRadius:7,
+                         color:"#fff", fontFamily:"Inter,sans-serif", fontSize:13, fontWeight:600,
+                         padding:"9px 16px", cursor: tmdbFetching ? "not-allowed" : "pointer" }}>
+                {tmdbFetching ? <><span className="spin" style={{ borderTopColor:"#fff" }} />Ophalen...</> : "Haal op"}
+              </button>
+            )}
+          </div>
+          {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
+        </div>
+      </div>
+
+      {filmResult && (
+        <div className="film-result">
+          <div className="film-result-card">
+            {filmResult.poster_url
+              ? <img src={filmResult.poster_url} alt={filmResult.title} className="film-result-poster" />
+              : <div className="film-result-poster-ph">[film]</div>}
+            <div className="film-result-body">
+              <div className="film-result-title">{filmResult.title}</div>
+              <div className="film-result-meta">
+                {filmResult.year && <span className="ytag">{filmResult.year}</span>}
+                {(filmResult.genres || []).map(g => <span key={g} className="tag">{g}</span>)}
+              </div>
+              {filmResult.description && <p className="film-result-desc">{filmResult.description}</p>}
+              <div className="film-result-ratings">
+                <div className="film-result-rating">
+                  <div><div className="rl">TMDB</div><div className={"rv " + (filmResult.tmdb_rating ? "tmdb" : "none")}>{filmResult.tmdb_rating || "N/B"}</div></div>
+                </div>
+                <div className="film-result-rating">
+                  <div><div className="rl">IMDb</div><div className={"rv " + (imdbRating ? "imdb" : "none")}>{imdbRating || "N/B"}</div></div>
+                </div>
+              </div>
+              {/* Manual IMDb fields */}
+              <div className="film-imdb-input">
+                <label className="flabel">IMDb score (optioneel)</label>
+                <div className="film-imdb-row">
+                  <input className="finput" style={{ fontSize:13, padding:"8px 12px" }}
+                    placeholder="bv. 8.8/10"
+                    value={imdbRating}
+                    onChange={e => setImdbRating(e.target.value)} />
+                  {filmResult.imdb_url && (
+                    <a href={filmResult.imdb_url} target="_blank" rel="noopener noreferrer"
+                      className="lb sec" style={{ whiteSpace:"nowrap", padding:"8px 14px" }}>IMDb</a>
+                  )}
+                </div>
+              </div>
+              <button
+                className={"lb " + (saved || alreadySaved ? "saved" : "save")}
+                onClick={handleSave}
+                disabled={saved || alreadySaved}>
+                {saved || alreadySaved ? "v Opgeslagen in filmbib." : "[PIN] Opslaan in filmbib."}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// --- Import ----------------------------------------------------------------
+function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
+  const [phase,      setPhase]      = useState("idle");
+  const [savedCount, setSavedCount] = useState(0);
+  const [enriched,   setEnriched]   = useState(0);
+  const [current,    setCurrent]    = useState("");   // title currently being processed
+  const [errors,     setErrors]     = useState([]);
+  const [tmdbKey,    setTmdbKeyState] = useState(getTmdbKey);
+  const running = useRef(false);
   const pct = phase === "step2" ? Math.round((enriched / IMPORT_LIST.length) * 100) : phase === "done" ? 100 : 0;
+
+  function saveTmdbKey(k) { setTmdbKey(k); setTmdbKeyState(k); }
+
+  function handleReset() {
+    if (window.confirm("Alle AI-gegevens verwijderen en opnieuw importeren? Titels blijven bewaard.")) {
+      onResetLibrary();
+    }
+  }
 
   async function start() {
     running.current = true;
-    setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0);
-    setBstates(BATCHES.map(() => "pending"));
+    setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0); setCurrent("");
 
-    // Stap 1: sla alles direct op met basisdata
     const existingTitles = new Set(currentLibrary.map(e => (e.title || "").toLowerCase()));
-    const basic = IMPORT_LIST
-      .filter(s => !existingTitles.has(s.title.toLowerCase()))
+    const basic = IMPORT_LIST.filter(s => !existingTitles.has(s.title.toLowerCase()))
       .map((s, i) => ({
-        id: "imp" + Date.now() + i,
-        title: s.title, streaming_service: s.streaming_service, streaming_url: s.streaming_url,
-        genres: [], year: null, description: null,
-        imdb_rating: null, imdb_url: null, rt_rating: null, rt_url: null,
-        savedAt: new Date().toISOString(), enriched: false,
+        id: "imp" + Date.now() + i, title: s.title,
+        streaming_service: s.streaming_service, streaming_url: s.streaming_url,
+        genres: [], year: null, description: null, imdb_rating: null, imdb_url: null,
+        rt_rating: null, rt_url: null, savedAt: new Date().toISOString(), enriched: false,
       }));
 
     const merged = [...basic, ...currentLibrary];
     setSavedCount(basic.length);
-    saveLib(merged);
-    onLibraryUpdate([...merged]);
+    saveLib(merged); onLibraryUpdate([...merged]);
     setPhase("step2");
 
-    // Stap 2: AI verrijking per batch
     let working = [...merged];
-    for (let bi = 0; bi < BATCHES.length; bi++) {
+
+    // Process each series individually  -  TMDB first, Claude as fallback
+    const toEnrich = IMPORT_LIST.filter(s => {
+      const found = working.find(w => w.title.toLowerCase() === s.title.toLowerCase());
+      return found && !found.enriched;
+    });
+
+    for (const series of toEnrich) {
       if (!running.current) break;
-      setBstates(p => p.map((s, idx) => idx === bi ? "running" : s));
-
-      const batchSeries = BATCHES[bi].filter(s => {
-        const found = working.find(w => w.title.toLowerCase() === s.title.toLowerCase());
-        return found && !found.enriched;
-      });
-
-      if (!batchSeries.length) {
-        setBstates(p => p.map((s, idx) => idx === bi ? "done" : s));
-        continue;
-      }
-
+      setCurrent(series.title);
       try {
-        const list = batchSeries.map((s, i) => (i + 1) + '. "' + s.title + '" (' + s.streaming_service + ")").join("\n");
-        const prompt =
-          "Geef TV serie informatie als JSON array voor " + batchSeries.length + " items:\n" + list + "\n\n" +
-          "Elk object: {\"year\":\"JJJJ of null\",\"genres\":[\"string\"],\"desc\":\"2-3 zinnen Nederlands\"," +
-          "\"imdb\":\"X.X/10 of null\",\"imdb_url\":\"url of null\",\"rt\":\"XX% of null\",\"rt_url\":\"url of null\"}\n\n" +
-          "Geef ALLEEN de raw JSON array terug. Begin met [ en eindig met ].";
-
-        const text = await claude([{ role: "user", content: prompt }], 4000);
-        const aiResults = parseJsonArray(text);
-
-        aiResults.forEach((ai, i) => {
-          if (!ai) return;
-          const orig = batchSeries[i]; if (!orig) return;
-          const idx = working.findIndex(w => w.title.toLowerCase() === orig.title.toLowerCase());
-          if (idx === -1) return;
+        const data = await enrichOne(series.title, series.streaming_service);
+        const idx = working.findIndex(w => w.title.toLowerCase() === series.title.toLowerCase());
+        if (idx !== -1) {
           working[idx] = {
             ...working[idx],
-            year: ai.year || working[idx].year,
-            genres: Array.isArray(ai.genres) && ai.genres.length ? ai.genres : working[idx].genres,
-            description: ai.desc || working[idx].description,
-            imdb_rating: ai.imdb || working[idx].imdb_rating,
-            imdb_url: typeof ai.imdb_url === "string" && ai.imdb_url.startsWith("http") ? ai.imdb_url : working[idx].imdb_url,
-            rt_rating: ai.rt || working[idx].rt_rating,
-            rt_url: typeof ai.rt_url === "string" && ai.rt_url.startsWith("http") ? ai.rt_url : working[idx].rt_url,
+            title:       data.title       || working[idx].title,
+            year:        data.year        || working[idx].year,
+            genres:      data.genres?.length ? data.genres : working[idx].genres,
+            description: data.description || working[idx].description,
+            imdb_rating: data.imdb_rating || working[idx].imdb_rating,
+            tmdb_rating: data.tmdb_rating || working[idx].tmdb_rating || null,
+            imdb_url:    data.imdb_url    || working[idx].imdb_url,
+            poster_url:  data.poster_url  || working[idx].poster_url,
             enriched: true,
           };
-        });
-
-        setEnriched(n => n + batchSeries.length);
-        saveLib(working);
-        onLibraryUpdate([...working]);
-        setBstates(p => p.map((s, idx) => idx === bi ? "done" : s));
+        }
       } catch (err) {
-        const preview = batchSeries.slice(0, 2).map(s => s.title).join(", ");
-        setErrors(p => [...p, "Batch " + (bi + 1) + " (" + preview + "…): " + err.message]);
-        setBstates(p => p.map((s, idx) => idx === bi ? "error" : s));
+        setErrors(p => [...p, series.title + ": " + err.message]);
       }
-
-      if (bi < BATCHES.length - 1) await new Promise(r => setTimeout(r, 1200));
+      setEnriched(n => n + 1);
+      // Save every 5 series so progress is preserved
+      if ((toEnrich.indexOf(series) + 1) % 5 === 0) {
+        saveLib(working); onLibraryUpdate([...working]);
+      }
+      await new Promise(r => setTimeout(r, 300)); // small delay between requests
     }
 
-    running.current = false;
-    setPhase("done");
+    saveLib(working); onLibraryUpdate([...working]);
+    running.current = false; setCurrent(""); setPhase("done");
   }
 
   return (
     <div className="page">
       <div className="ip">
-        <p className="eyebrow">Bulk Import · {IMPORT_LIST.length} series</p>
-        <h1 className="big-title">SERIE<em>IMPORT</em></h1>
-        <p style={{ fontSize: 14, color: "#6e6e73", marginBottom: 20, marginTop: 7, lineHeight: 1.6 }}>
-          Stap 1: alle series direct opslaan. Stap 2: AI verrijkt met genre, omschrijving en ratings.
-        </p>
+        <div className="ip-hero">
+          <h1 className="ip-title">Serie<em>Import</em></h1>
+          <p className="ip-sub">Stap 1: alle series direct opslaan. Stap 2: TMDB verrijkt elk item met genre, omschrijving en score.</p>
+        </div>
+        {/* TMDB key invoer */}
+        <div className="imp-card" style={{ marginBottom: 14 }}>
+          <div style={{ display:"flex", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
+            <div style={{ flex:1, minWidth:240 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:"#1a1a2e", marginBottom:4 }}>
+                [film] TMDB API-sleutel
+                {tmdbKey && <span style={{ color:"#28a745", marginLeft:8, fontWeight:400 }}>v Ingesteld</span>}
+              </div>
+              <div style={{ fontSize:12, color:"#6e6e73", marginBottom:8, lineHeight:1.5 }}>
+                Gratis sleutel via <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer" style={{ color:"#0066cc" }}>themoviedb.org</a>, Settings, API, Read Access Token.<br />
+                Met TMDB worden vrijwel alle series gevonden. Zonder TMDB gebruikt de app alleen AI als fallback.
+              </div>
+              <input
+                className="finput"
+                style={{ fontSize:12, padding:"8px 12px" }}
+                type="password"
+                placeholder="eyJhbGciOiJIUzI1NiJ9..."
+                defaultValue={tmdbKey}
+                onBlur={e => saveTmdbKey(e.target.value.trim())}
+                onKeyDown={e => e.key === "Enter" && saveTmdbKey(e.target.value.trim())}
+              />
+            </div>
+          </div>
+        </div>
 
         {phase === "idle" && (
           <div className="imp-card">
             <p style={{ fontSize: 13, color: "#6e6e73", lineHeight: 1.7, marginBottom: 14 }}>
-              <strong>{IMPORT_LIST.length} series</strong> · {BATCHES.length} batches van 8.<br />
-              Bibliotheek is direct zichtbaar na stap 1.
+              <strong>{IMPORT_LIST.length} series</strong> worden een voor een opgezocht.<br />
+              {tmdbKey ? "v TMDB actief  -  hoge nauwkeurigheid." : "! Geen TMDB-sleutel  -  alleen AI als fallback."}<br />
+              Bibliotheek is direct zichtbaar, verrijking loopt op de achtergrond.
             </p>
-            <button className="btn-red" onClick={start}>START IMPORT</button>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button className="btn-primary" onClick={start}>Start import</button>
+              <button className="btn-secondary" onClick={handleReset}>Reset herstart</button>
+            </div>
           </div>
         )}
 
         {(phase === "step1" || phase === "step2") && (
           <div className="imp-card">
             {phase === "step1" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:9 }}>
                 <span className="spin" />
-                <span style={{ fontSize: 14, color: "#6e6e73" }}>Basisdata opslaan…</span>
+                <span style={{ fontSize:14, color:"#6e6e73" }}>Basisdata opslaan...</span>
               </div>
             )}
             {phase === "step2" && (
               <>
                 <div className="prog-row">
-                  <div className="prog-lbl"><span className="spin" />AI verrijking</div>
+                  <div className="prog-lbl"><span className="spin" />Verrijken via TMDB + AI</div>
                   <div className="prog-n">{pct}%</div>
                 </div>
                 <div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div>
-                <div className="prog-sub">{enriched} van {IMPORT_LIST.length} verrijkt</div>
-                <div className="brow">
-                  {BATCHES.map((_, i) => (
-                    <div key={i} className={"bp " + (bstates[i] || "pending")}>
-                      {bstates[i] === "running" && <span className="spin" style={{ width: 9, height: 9, marginRight: 0 }} />}
-                      {bstates[i] === "done" && "✓ "}
-                      {bstates[i] === "error" && "✕ "}
-                      B{i + 1}
-                    </div>
-                  ))}
+                <div className="prog-sub">
+                  {enriched} van {IMPORT_LIST.length} verwerkt
+                  {current && <span style={{ marginLeft:8, color:"#aaa" }}>. {current}</span>}
                 </div>
               </>
             )}
@@ -989,92 +1594,97 @@ function ImportPage({ currentLibrary, onLibraryUpdate }) {
 
         {phase === "done" && (
           <div className="done-card">
-            <div className="done-ico">✓</div>
+            <div className="done-ico">v</div>
             <div className="done-title">{savedCount} SERIES OPGESLAGEN</div>
             <div className="done-sub">
-              {enriched} verrijkt met AI.
-              {errors.length > 0 && " · " + errors.length + " batch(es) deels mislukt."}
-              <br />Open de <strong style={{ color: "#28a745" }}>Bibliotheek</strong>.
+              {enriched} series verwerkt.
+              {errors.length > 0 && " . " + errors.length + " serie(s) deels mislukt."}
+              <br />Open de <strong style={{ color:"#28a745" }}>Bibliotheek</strong>.
             </div>
-            <div style={{ marginTop: 14 }}>
-              <button className="btn-ghost" onClick={() => {
-                setPhase("idle"); setEnriched(0); setSavedCount(0);
-                setErrors([]); setBstates(BATCHES.map(() => "pending"));
-              }}>
+            <div style={{ marginTop:14 }}>
+              <button className="btn-secondary" onClick={() => { setPhase("idle"); setEnriched(0); setSavedCount(0); setErrors([]); setCurrent(""); }}>
                 Opnieuw importeren
               </button>
             </div>
           </div>
         )}
-
-        {errors.length > 0 && (
-          <div className="errs">
-            {errors.map((e, i) => <div key={i} className="ei">{e}</div>)}
-          </div>
-        )}
+        {errors.length > 0 && <div className="errs">{errors.map((e, i) => <div key={i} className="ei">{e}</div>)}</div>}
       </div>
     </div>
   );
 }
 
-// ─── Root ──────────────────────────────────────────────────────────────────
+// --- Root ------------------------------------------------------------------
 export default function App() {
-  const [apiKey, setApiKey] = useState(null);
-  const [showKeyModal, setShowKeyModal] = useState(false);
   const [page, setPage] = useState("search");
   const [library, setLibrary] = useState([]);
+  const [films, setFilms]     = useState([]);
   const [enrichingIds, setEnrichingIds] = useState(new Set());
 
   useEffect(() => {
-    setApiKey(getKey());
+    // Inject Google Fonts (avoids @import inside JS template literal which breaks Vite)
+    if (!document.getElementById("gfonts")) {
+      const link = document.createElement("link");
+      link.id   = "gfonts";
+      link.rel  = "stylesheet";
+      link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap";
+      document.head.appendChild(link);
+    }
     setLibrary(loadLib());
+    setFilms(loadFilms());
   }, []);
 
   function updateLibrary(items) {
     setLibrary([...items]);
     setEnrichingIds(new Set(items.filter(i => i.enriched === false).map(i => i.id)));
   }
-
-  async function addItem(item) {
-    const updated = [item, ...library];
-    setLibrary(updated);
-    saveLib(updated);
+  function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
+  function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
+  function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
+  function toggleFilmWatched(id) {
+    const u = films.map(f => f.id === id ? { ...f, watched: !f.watched } : f);
+    setFilms(u); saveFilms(u);
   }
-
-  async function deleteItem(id) {
-    const updated = library.filter(i => i.id !== id);
-    setLibrary(updated);
-    saveLib(updated);
+  function updateItem(item) { const u = library.map(i => i.id === item.id ? item : i); setLibrary(u); saveLib(u); }
+  function resetLibrary() {
+    // Keep titles/streaming but wipe all AI data so import starts fresh
+    const reset = library.map(i => ({
+      ...i,
+      genres: [], year: null, description: null,
+      imdb_rating: null, imdb_url: null,
+      rt_rating: null, rt_url: null,
+      enriched: false,
+    }));
+    setLibrary(reset);
+    saveLib(reset);
+    setEnrichingIds(new Set(reset.map(i => i.id)));
   }
-
-  if (apiKey === null) return null;
-  if (!apiKey) return <Onboarding onDone={k => setApiKey(k)} />;
+  function deleteItem(id) { const u = library.filter(i => i.id !== id); setLibrary(u); saveLib(u); }
+  function toggleWatched(id) { const u = library.map(i => i.id === id ? { ...i, watched: !i.watched } : i); setLibrary(u); saveLib(u); }
 
   return (
     <>
-      <style>{CSS}</style>
-      <div style={{ minHeight: "100vh", background: "#f5f5f7" }}>
+      <div style={{ minHeight: "100vh", background: "#f8f7f5" }}>
         <nav className="nav">
-          <div className="logo" onClick={() => setPage("search")}>SERIE<em>INFO</em></div>
-          <div className="nav-right">
-            <div className="tabs">
-              <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>🔍 Zoeken</button>
-              <button className={"tab " + (page === "library" ? "on" : "")} onClick={() => setPage("library")}>
-                📚 Bibliotheek{library.length > 0 && <span className="badge">{library.length}</span>}
-              </button>
-              <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>📥 Import</button>
-            </div>
-            <button className="key-btn" onClick={() => setShowKeyModal(true)}>🔑 Key</button>
+          <div className="logo" onClick={() => setPage("search")}><span className="logo-dot"></span>Serie<em>Info</em></div>
+          <div className="tabs">
+            <button className={"tab " + (page === "search" ? "on" : "")} onClick={() => setPage("search")}>[zoek] Zoeken</button>
+            <button className={"tab " + (page === "library" ? "on" : "")} onClick={() => setPage("library")}>
+              [lib] Series{library.length > 0 && <span className="badge">{library.length}</span>}
+            </button>
+            <button className={"tab " + (page === "films" ? "on" : "")} onClick={() => setPage("films")}>
+              [film] Films{films.length > 0 && <span className="badge">{films.length}</span>}
+            </button>
+            <button className={"tab " + (page === "import" ? "on" : "")} onClick={() => setPage("import")}>[in] Import</button>
           </div>
         </nav>
-
-        {page === "search" && <SearchPage library={library} onSave={addItem} />}
-        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onGo={setPage} />}
-        {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} />}
-
-        {showKeyModal && (
-          <KeyModal current={apiKey} onSave={k => setApiKey(k)} onClose={() => setShowKeyModal(false)} />
+        {page === "search" && <SearchPage library={library} films={films} onSave={addItem} onSaveFilm={addFilm} />}
+        {page === "films" && (
+          <FilmLibraryPage films={films} onDelete={deleteFilm}
+            onToggleWatched={toggleFilmWatched} onGo={setPage} />
         )}
+        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onUpdate={updateItem} onGo={setPage} />}
+        {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
     </>
   );
