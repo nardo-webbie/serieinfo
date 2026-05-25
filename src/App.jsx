@@ -162,9 +162,10 @@ function SyncBar({ library, films, onImport }) {
   const [msg,      setMsg]      = useState("");
   const [lastSync, setLastSync] = useState(null);
 
-  // Auto-sync 2s after any change when enabled
+  // Auto-sync 2s after any change when enabled  -  skip if local data is empty
   useEffect(() => {
     if (!enabled) return;
+    if (library.length === 0 && films.length === 0) return; // don't wipe cloud with empty data
     const timer = setTimeout(() => doPush(library, films), 2000);
     return () => clearTimeout(timer);
   }, [library, films, enabled]);
@@ -206,7 +207,8 @@ function SyncBar({ library, films, onImport }) {
   function handleToggle() {
     const next = !enabled;
     setEnabled(next); setSyncEnabled(next);
-    if (next) doPush(library, films);
+    // Always pull first when enabling  -  prevents new users from wiping cloud data
+    if (next) pullFromCloud();
   }
 
   const dot = !enabled ? "off" : { syncing:"syncing", ok:"ok", error:"error" }[status] || "off";
@@ -239,7 +241,7 @@ function SyncBar({ library, films, onImport }) {
           </>
         )}
         <button className={"sync-btn" + (!enabled ? " primary" : "")} onClick={handleToggle}>
-          {enabled ? "Sync uit" : "Sync inschakelen"}
+          {enabled ? "Sync uitschakelen" : "Sync inschakelen + ophalen"}
         </button>
       </div>
     </div>
