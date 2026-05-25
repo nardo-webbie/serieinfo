@@ -1809,7 +1809,7 @@ export default function App() {
       const link = document.createElement("link");
       link.id   = "gfonts";
       link.rel  = "stylesheet";
-      link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap";
+      link.href = "https://fonts.bunny.net/css?family=inter:400,500,600,700|playfair-display:600,600i,700,700i&display=swap";
       document.head.appendChild(link);
     }
 
