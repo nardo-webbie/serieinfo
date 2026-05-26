@@ -4,7 +4,7 @@
 // Read:    GET  https://jsonblob.com/api/jsonBlob/{id}     → 200, JSON body
 // Update:  PUT  https://jsonblob.com/api/jsonBlob/{id}     → 200, geen auth vereist
 
-const BASE = "https://jsonblob.com/api/jsonBlob";
+const BASE = "https://jsonblob.com";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
