@@ -1,7 +1,10 @@
-// Cloud sync via npoint.io — geen API-sleutel vereist
-// Env var: NPOINT_BIN_ID (het ID van je npoint.io endpoint)
+// Cloud sync via jsonblob.com
+// Geen API-sleutel vereist — alleen JSONBLOB_ID als env var
+// Create:  POST https://jsonblob.com/api/jsonBlob          → 201, Location header bevat ID
+// Read:    GET  https://jsonblob.com/api/jsonBlob/{id}     → 200, JSON body
+// Update:  PUT  https://jsonblob.com/api/jsonBlob/{id}     → 200, geen auth vereist
 
-const BASE = "https://api.npoint.io";
+const BASE = "https://jsonblob.com/api/jsonBlob";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -9,20 +12,18 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const binId = process.env.NPOINT_BIN_ID;
+  const blobId = process.env.JSONBLOB_ID;
 
-  // Safe JSON parse — handles HTML error pages gracefully
-  async function safeJson(response) {
-    const text = await response.text();
+  async function safeJson(r) {
+    const text = await r.text();
     try {
-      return { ok: response.ok, status: response.status, data: JSON.parse(text) };
+      return { ok: r.ok, status: r.status, data: JSON.parse(text) };
     } catch {
       const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-      throw new Error("npoint gaf geen JSON (status " + response.status + "): " + preview);
+      throw new Error("jsonblob gaf geen JSON (status " + r.status + "): " + preview);
     }
   }
 
-  // Robust body reader
   async function readBody() {
     if (req.body !== null && req.body !== undefined) {
       if (typeof req.body === "object") return req.body;
@@ -41,42 +42,50 @@ export default async function handler(req, res) {
 
     // GET — haal bibliotheek op
     if (req.method === "GET") {
-      if (!binId) return res.status(404).json({ error: "NPOINT_BIN_ID niet ingesteld in Vercel" });
-      const { ok, status, data } = await safeJson(await fetch(BASE + "/" + binId));
-      if (!ok) return res.status(status).json({ error: data.message || "npoint GET fout " + status });
+      if (!blobId) return res.status(404).json({ error: "JSONBLOB_ID niet ingesteld in Vercel" });
+      const { ok, status, data } = await safeJson(
+        await fetch(BASE + "/" + blobId, {
+          headers: { "Accept": "application/json" },
+        })
+      );
+      if (!ok) return res.status(status).json({ error: "jsonblob GET fout " + status });
       return res.status(200).json(data);
     }
 
     // PUT — bibliotheek bijwerken
     if (req.method === "PUT") {
-      if (!binId) return res.status(400).json({ error: "NPOINT_BIN_ID niet ingesteld in Vercel" });
+      if (!blobId) return res.status(400).json({ error: "JSONBLOB_ID niet ingesteld in Vercel" });
       const body = await readBody();
       if (!body || (!body.library && !body.films)) {
         return res.status(400).json({ error: "Leeg of ongeldig request body" });
       }
-      const { ok, status, data } = await safeJson(
-        await fetch(BASE + "/" + binId, {
-          method:  "POST",             // npoint gebruikt POST voor updates
-          headers: { "Content-Type": "application/json" },
+      const { ok, status } = await safeJson(
+        await fetch(BASE + "/" + blobId, {
+          method:  "PUT",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
           body:    JSON.stringify(body),
         })
       );
-      if (!ok) return res.status(status).json({ error: data.message || "npoint PUT fout " + status });
+      if (!ok) return res.status(status).json({ error: "jsonblob PUT fout " + status });
       return res.status(200).json({ ok: true });
     }
 
-    // POST — eerste keer aanmaken (wordt eenmalig gebruikt)
+    // POST — eerste keer blob aanmaken
     if (req.method === "POST") {
       const body = await readBody();
-      const { ok, status, data } = await safeJson(
-        await fetch(BASE + "/", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify(body),
-        })
-      );
-      if (!ok) return res.status(status).json({ error: data.message || "npoint aanmaken fout" });
-      return res.status(200).json(data); // bevat het nieuwe { id, ... }
+      const r = await fetch(BASE, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        return res.status(r.status).json({ error: "jsonblob aanmaken fout: " + text.slice(0, 120) });
+      }
+      // ID zit in de Location header: https://jsonblob.com/api/jsonBlob/123456789
+      const location = r.headers.get("location") || "";
+      const id = location.split("/").pop();
+      return res.status(200).json({ id, location });
     }
 
     return res.status(405).json({ error: "Method not allowed" });
