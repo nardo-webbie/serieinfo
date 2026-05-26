@@ -114,36 +114,38 @@ async function enrichOne(title, streamingService) {
 
 
 
-// --- Cloud Sync (JSONBin via /api/sync proxy) ----------------------------
+// --- Cloud Sync via npoint.io (proxy: /api/sync) -------------------------
 const SYNC_ENABLED_KEY = "serieinfo-sync-on";
 const getSyncEnabled = () => localStorage.getItem(SYNC_ENABLED_KEY) === "true";
 const setSyncEnabled = (v) => localStorage.setItem(SYNC_ENABLED_KEY, v ? "true" : "false");
 
+// Parse response safely  -  returns object or throws readable error
+async function parseSync(r) {
+  const text = await r.text();
+  let d;
+  try { d = JSON.parse(text); } catch {
+    throw new Error("Server fout (" + r.status + "): " + text.replace(/<[^>]+>/g, "").trim().slice(0, 80));
+  }
+  if (!r.ok) throw new Error(d.error || "Sync fout " + r.status);
+  return d;
+}
+
 async function cloudGet() {
-  const r = await fetch("/api/sync");
-  if (!r.ok) throw new Error("Sync ophalen mislukt (" + r.status + ")");
-  return r.json();
+  return parseSync(await fetch("/api/sync"));
 }
 async function cloudPut(data) {
-  const r = await fetch("/api/sync", {
-    method: "PUT",
+  return parseSync(await fetch("/api/sync", {
+    method:  "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    throw new Error(d.error || "Sync opslaan mislukt (" + r.status + ")");
-  }
-  return r.json();
+    body:    JSON.stringify(data),
+  }));
 }
 async function cloudCreate(data) {
-  const r = await fetch("/api/sync", {
-    method: "POST",
+  return parseSync(await fetch("/api/sync", {
+    method:  "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!r.ok) throw new Error("Sync aanmaken mislukt (" + r.status + ")");
-  return r.json();
+    body:    JSON.stringify(data),
+  }));
 }
 
 function exportLibrary(library, films) {
