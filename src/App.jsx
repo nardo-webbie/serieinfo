@@ -232,6 +232,33 @@ function SyncBar({ library, films, onImport }) {
         <button className="sync-btn" onClick={() => exportLibrary(library, films)}>
           Exporteer JSON
         </button>
+        <label className="sync-btn" style={{ cursor:"pointer" }} title="Importeer een eerder geexporteerd JSON-bestand">
+          Importeer JSON
+          <input type="file" accept=".json,application/json" style={{ display:"none" }}
+            onChange={e => {
+              const file = e.target.files[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = evt => {
+                try {
+                  const data = JSON.parse(evt.target.result);
+                  if (!data.library && !data.films) {
+                    alert("Ongeldig bestand: geen library of films gevonden.");
+                    return;
+                  }
+                  onImport(Array.isArray(data.library) ? data.library : [],
+                           Array.isArray(data.films)   ? data.films   : []);
+                  alert("Import geslaagd: " +
+                    (data.library ? data.library.length : 0) + " series, " +
+                    (data.films   ? data.films.length   : 0) + " films geladen.");
+                } catch {
+                  alert("Fout: kon het bestand niet lezen. Is het een geldig SerieInfo JSON-bestand?");
+                }
+                e.target.value = "";
+              };
+              reader.readAsText(file);
+            }} />
+        </label>
         {enabled && (
           <>
             <button className="sync-btn primary" onClick={() => doPush(library, films)} disabled={status === "syncing"}>
