@@ -1,33 +1,28 @@
+// Cloud sync via npoint.io — geen API-sleutel vereist
+// Env var: NPOINT_BIN_ID (het ID van je npoint.io endpoint)
+
+const BASE = "https://api.npoint.io";
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const masterKey = process.env.JSONBIN_KEY;
-  const binId     = process.env.JSONBIN_BIN_ID;
+  const binId = process.env.NPOINT_BIN_ID;
 
-  if (!masterKey) return res.status(500).json({ error: "JSONBIN_KEY niet ingesteld" });
-
-  const jbHeaders = {
-    "Content-Type":  "application/json",
-    "X-Master-Key":  masterKey,
-    "X-Bin-Private": "false",
-  };
-
-  // Safe JSON parse from a fetch Response — handles HTML error pages
+  // Safe JSON parse — handles HTML error pages gracefully
   async function safeJson(response) {
     const text = await response.text();
     try {
-      return JSON.parse(text);
+      return { ok: response.ok, status: response.status, data: JSON.parse(text) };
     } catch {
-      // JSONBin returned HTML (rate limit, maintenance, etc.)
       const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-      throw new Error("JSONBin gaf geen JSON terug (status " + response.status + "): " + preview);
+      throw new Error("npoint gaf geen JSON (status " + response.status + "): " + preview);
     }
   }
 
-  // Robust body parsing
+  // Robust body reader
   async function readBody() {
     if (req.body !== null && req.body !== undefined) {
       if (typeof req.body === "object") return req.body;
@@ -44,38 +39,44 @@ export default async function handler(req, res) {
 
   try {
 
+    // GET — haal bibliotheek op
     if (req.method === "GET") {
-      if (!binId) return res.status(404).json({ error: "JSONBIN_BIN_ID niet ingesteld" });
-      const r = await fetch("https://api.jsonbin.io/v3/b/" + binId + "/latest", { headers: jbHeaders });
-      const d = await safeJson(r);
-      if (!r.ok) return res.status(r.status).json({ error: d.message || "JSONBin GET fout" });
-      return res.status(200).json(d.record || {});
+      if (!binId) return res.status(404).json({ error: "NPOINT_BIN_ID niet ingesteld in Vercel" });
+      const { ok, status, data } = await safeJson(await fetch(BASE + "/" + binId));
+      if (!ok) return res.status(status).json({ error: data.message || "npoint GET fout " + status });
+      return res.status(200).json(data);
     }
 
+    // PUT — bibliotheek bijwerken
     if (req.method === "PUT") {
-      if (!binId) return res.status(400).json({ error: "JSONBIN_BIN_ID niet ingesteld" });
+      if (!binId) return res.status(400).json({ error: "NPOINT_BIN_ID niet ingesteld in Vercel" });
       const body = await readBody();
       if (!body || (!body.library && !body.films)) {
-        return res.status(400).json({ error: "Leeg request body" });
+        return res.status(400).json({ error: "Leeg of ongeldig request body" });
       }
-      const r = await fetch("https://api.jsonbin.io/v3/b/" + binId, {
-        method: "PUT", headers: jbHeaders, body: JSON.stringify(body),
-      });
-      const d = await safeJson(r);
-      if (!r.ok) return res.status(r.status).json({ error: d.message || "JSONBin PUT fout" });
+      const { ok, status, data } = await safeJson(
+        await fetch(BASE + "/" + binId, {
+          method:  "POST",             // npoint gebruikt POST voor updates
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(body),
+        })
+      );
+      if (!ok) return res.status(status).json({ error: data.message || "npoint PUT fout " + status });
       return res.status(200).json({ ok: true });
     }
 
+    // POST — eerste keer aanmaken (wordt eenmalig gebruikt)
     if (req.method === "POST") {
       const body = await readBody();
-      const r = await fetch("https://api.jsonbin.io/v3/b", {
-        method: "POST",
-        headers: { ...jbHeaders, "X-Bin-Name": "serieinfo" },
-        body: JSON.stringify(body),
-      });
-      const d = await safeJson(r);
-      if (!r.ok) return res.status(r.status).json({ error: d.message || "JSONBin POST fout" });
-      return res.status(200).json(d);
+      const { ok, status, data } = await safeJson(
+        await fetch(BASE + "/", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(body),
+        })
+      );
+      if (!ok) return res.status(status).json({ error: data.message || "npoint aanmaken fout" });
+      return res.status(200).json(data); // bevat het nieuwe { id, ... }
     }
 
     return res.status(405).json({ error: "Method not allowed" });
