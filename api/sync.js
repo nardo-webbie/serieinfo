@@ -1,10 +1,9 @@
-// Cloud sync via jsonblob.com
-// Geen API-sleutel vereist — alleen JSONBLOB_ID als env var
-// Create:  POST https://jsonblob.com/api/jsonBlob          → 201, Location header bevat ID
-// Read:    GET  https://jsonblob.com/api/jsonBlob/{id}     → 200, JSON body
-// Update:  PUT  https://jsonblob.com/api/jsonBlob/{id}     → 200, geen auth vereist
+// Cloud sync via GitHub Gist
+// Env vars: GITHUB_TOKEN + GITHUB_GIST_ID
+// Lezen werkt zonder token (publieke gist), schrijven vereist token
 
-const BASE = "https://jsonblob.com";
+const GIST_API = "https://api.github.com/gists";
+const FILE     = "serieinfo.json";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,7 +11,15 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const blobId = process.env.JSONBLOB_ID;
+  const token  = process.env.GITHUB_TOKEN;
+  const gistId = process.env.GITHUB_GIST_ID;
+
+  const headers = {
+    "Accept":       "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "User-Agent":   "SerieInfo-App",
+    ...(token ? { "Authorization": "Bearer " + token } : {}),
+  };
 
   async function safeJson(r) {
     const text = await r.text();
@@ -20,7 +27,7 @@ export default async function handler(req, res) {
       return { ok: r.ok, status: r.status, data: JSON.parse(text) };
     } catch {
       const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-      throw new Error("jsonblob gaf geen JSON (status " + r.status + "): " + preview);
+      throw new Error("GitHub gaf geen JSON (status " + r.status + "): " + preview);
     }
   }
 
@@ -42,50 +49,52 @@ export default async function handler(req, res) {
 
     // GET — haal bibliotheek op
     if (req.method === "GET") {
-      if (!blobId) return res.status(404).json({ error: "JSONBLOB_ID niet ingesteld in Vercel" });
+      if (!gistId) return res.status(404).json({ error: "GITHUB_GIST_ID niet ingesteld in Vercel" });
       const { ok, status, data } = await safeJson(
-        await fetch(BASE + "/" + blobId, {
-          headers: { "Accept": "application/json" },
-        })
+        await fetch(GIST_API + "/" + gistId, { headers })
       );
-      if (!ok) return res.status(status).json({ error: "jsonblob GET fout " + status });
-      return res.status(200).json(data);
+      if (!ok) return res.status(status).json({ error: data.message || "GitHub GET fout " + status });
+      const content = data.files?.[FILE]?.content;
+      if (!content) return res.status(404).json({ error: "Bestand " + FILE + " niet gevonden in gist" });
+      return res.status(200).json(JSON.parse(content));
     }
 
     // PUT — bibliotheek bijwerken
     if (req.method === "PUT") {
-      if (!blobId) return res.status(400).json({ error: "JSONBLOB_ID niet ingesteld in Vercel" });
+      if (!gistId)  return res.status(400).json({ error: "GITHUB_GIST_ID niet ingesteld" });
+      if (!token)   return res.status(401).json({ error: "GITHUB_TOKEN niet ingesteld in Vercel" });
       const body = await readBody();
       if (!body || (!body.library && !body.films)) {
         return res.status(400).json({ error: "Leeg of ongeldig request body" });
       }
-      const { ok, status } = await safeJson(
-        await fetch(BASE + "/" + blobId, {
-          method:  "PUT",
-          headers: { "Content-Type": "application/json", "Accept": "application/json" },
-          body:    JSON.stringify(body),
+      const payload = {
+        files: { [FILE]: { content: JSON.stringify(body) } }
+      };
+      const { ok, status, data } = await safeJson(
+        await fetch(GIST_API + "/" + gistId, {
+          method:  "PATCH",
+          headers,
+          body:    JSON.stringify(payload),
         })
       );
-      if (!ok) return res.status(status).json({ error: "jsonblob PUT fout " + status });
+      if (!ok) return res.status(status).json({ error: data.message || "GitHub PATCH fout " + status });
       return res.status(200).json({ ok: true });
     }
 
-    // POST — eerste keer blob aanmaken
+    // POST — nieuwe gist aanmaken
     if (req.method === "POST") {
+      if (!token) return res.status(401).json({ error: "GITHUB_TOKEN vereist om gist aan te maken" });
       const body = await readBody();
-      const r = await fetch(BASE, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body:    JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const text = await r.text();
-        return res.status(r.status).json({ error: "jsonblob aanmaken fout: " + text.slice(0, 120) });
-      }
-      // ID zit in de Location header: https://jsonblob.com/api/jsonBlob/123456789
-      const location = r.headers.get("location") || "";
-      const id = location.split("/").pop();
-      return res.status(200).json({ id, location });
+      const payload = {
+        description: "SerieInfo bibliotheek sync",
+        public:      false,
+        files:       { [FILE]: { content: JSON.stringify(body) } },
+      };
+      const { ok, status, data } = await safeJson(
+        await fetch(GIST_API, { method: "POST", headers, body: JSON.stringify(payload) })
+      );
+      if (!ok) return res.status(status).json({ error: data.message || "GitHub POST fout " + status });
+      return res.status(200).json({ id: data.id, url: data.html_url });
     }
 
     return res.status(405).json({ error: "Method not allowed" });
