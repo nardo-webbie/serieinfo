@@ -465,6 +465,7 @@ const SVC_COLORS = {
   skyshowtime: "#8b45ff", npo: "#f07d00",
 };
 const svcColor = (s = "") => {
+  if (!s) return "#888";
   const k = s.toLowerCase();
   for (const [key, c] of Object.entries(SVC_COLORS)) if (k.includes(key)) return c;
   return "#888";
