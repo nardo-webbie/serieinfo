@@ -752,6 +752,15 @@ function extractTmdbId(url) {
   return m ? m[1] : null;
 }
 
+
+// Detect TV or movie from TMDB URL
+function parseTmdbUrl(url) {
+  const tv = (url || "").match(/\/tv\/([0-9]+)/);
+  if (tv) return { id: tv[1], type: "tv" };
+  const mv = (url || "").match(/\/movie\/([0-9]+)/);
+  if (mv) return { id: mv[1], type: "movie" };
+  return { id: null, type: null };
+}
 // --- Fetch from specific TMDB ID -----------------------------------------
 async function fetchFromTmdbId(tmdbId) {
   const key = getTmdbKey();
@@ -1388,24 +1397,29 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
   const [tmdbFetchOk,    setTmdbFetchOk]      = useState("");
 
   async function fetchFromTmdbUrl() {
-    const id = extractTmdbId(tmdbUrlInput.trim());
-    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL"); return; }
+    const { id, type } = parseTmdbUrl(tmdbUrlInput.trim());
+    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL (gebruik een themoviedb.org/tv/... URL)"); return; }
     setTmdbFetching(true); setTmdbFetchErr(""); setTmdbFetchOk("");
     try {
-      const data = await fetchFromTmdbId(id);
+      // Use TV fetch for /tv/ URLs, movie fetch for /movie/ URLs
+      const data = type === "movie"
+        ? await fetchMovieFromTmdbId(id)
+        : await fetchFromTmdbId(id);           // default: TV series
+      const prov = await fetchNLProvider(type === "movie" ? "movie" : "tv", id);
       setResult(prev => ({
         ...(prev || {}),
-        title:             data.title             || prev?.title             || series,
-        year:              data.year              || prev?.year              || null,
-        genres:            data.genres?.length    ? data.genres              : (prev?.genres || []),
-        description:       data.description       || prev?.description       || null,
-        tmdb_rating:       data.tmdb_rating       || prev?.tmdb_rating       || null,
-        imdb_url:          data.imdb_url          || prev?.imdb_url          || null,
-        poster_url:        data.poster_url        || prev?.poster_url        || null,
-        streaming_service: prev?.streaming_service || streaming,
-        streaming_url:     prev?.streaming_url     || null,
+        title:             data.title             || prev?.title  || series,
+        year:              data.year              || prev?.year   || null,
+        genres:            data.genres?.length    ? data.genres   : (prev?.genres || []),
+        description:       data.description       || prev?.description || null,
+        tmdb_rating:       data.tmdb_rating       || prev?.tmdb_rating || null,
+        imdb_url:          data.imdb_url          || prev?.imdb_url    || null,
+        poster_url:        data.poster_url        || prev?.poster_url  || null,
+        streaming_service: prov?.name             || prev?.streaming_service || null,
+        streaming_url:     prov?.url              || prev?.streaming_url     || null,
       }));
-      setTmdbFetchOk("v " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
+      const typeLabel = type === "movie" ? "Film" : "Serie";
+      setTmdbFetchOk("v " + typeLabel + ": " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
     } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
     finally { setTmdbFetching(false); }
   }
@@ -1423,7 +1437,7 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
         description:    ai.desc        || prev?.description || null,
         imdb_rating:    ai.imdb        || prev?.imdb_rating || null,
         imdb_url:       imdbUrlOverride.trim(),
-        streaming_service: prev?.streaming_service || streaming,
+        streaming_service: prev?.streaming_service || null,
         streaming_url:  prev?.streaming_url || null,
       }));
     } catch (e) { setImdbFetchErr(e.message || "Ophalen mislukt"); }
