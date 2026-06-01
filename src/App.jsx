@@ -350,6 +350,114 @@ async function fetchMovieFromTmdbId(tmdbId) {
   };
 }
 
+
+// --- NL streaming provider mapping --------------------------------------
+const NL_PROVIDERS = {
+  "Netflix":              { name:"Netflix",       url:"https://www.netflix.com" },
+  "Amazon Prime Video":   { name:"Prime Video",   url:"https://www.primevideo.com" },
+  "Prime Video":          { name:"Prime Video",   url:"https://www.primevideo.com" },
+  "Disney Plus":          { name:"Disney+",       url:"https://www.disneyplus.com" },
+  "Disney+":              { name:"Disney+",       url:"https://www.disneyplus.com" },
+  "Apple TV+":            { name:"Apple TV+",     url:"https://tv.apple.com" },
+  "Apple TV Plus":        { name:"Apple TV+",     url:"https://tv.apple.com" },
+  "Max":                  { name:"Max",           url:"https://www.max.com" },
+  "HBO Max":              { name:"Max",           url:"https://www.max.com" },
+  "SkyShowtime":          { name:"SkyShowtime",   url:"https://www.skyshowtime.com" },
+  "Videoland":            { name:"Videoland",     url:"https://www.videoland.com" },
+  "NPO Start":            { name:"NPO",           url:"https://www.npo.nl" },
+  "NPO Plus":             { name:"NPO",           url:"https://www.npo.nl" },
+  "Pathe Thuis":          { name:"Pathe Thuis",   url:"https://www.pathethuis.nl" },
+  "MUBI":                 { name:"MUBI",          url:"https://mubi.com" },
+};
+
+async function fetchNLProvider(type, tmdbId) {
+  // type = "tv" or "movie"
+  const key = getTmdbKey();
+  if (!key) return null;
+  try {
+    const r = await fetch(
+      "https://api.themoviedb.org/3/" + type + "/" + tmdbId + "/watch/providers",
+      { headers: { Authorization: "Bearer " + key, accept: "application/json" } }
+    );
+    const d = await r.json();
+    const nl = d.results && d.results.NL;
+    if (!nl) return null;
+    const flat = nl.flatrate || nl.ads || nl.free || [];
+    if (!flat.length) return null;
+    const provider = NL_PROVIDERS[flat[0].provider_name];
+    return provider || { name: flat[0].provider_name, url: nl.link || "" };
+  } catch { return null; }
+}
+
+// --- TMDB multi-result search (TV) --------------------------------------
+async function tmdbSearchResults(query) {
+  const key = getTmdbKey();
+  if (!key) return [];
+  const r = await fetch(
+    "https://api.themoviedb.org/3/search/tv?query=" + encodeURIComponent(query) +
+    "&language=en-US&page=1",
+    { headers: { Authorization: "Bearer " + key, accept: "application/json" } }
+  );
+  const d = await r.json();
+  return (d.results || []).slice(0, 8).map(s => ({
+    tmdb_id:     s.id,
+    title:       s.name,
+    year:        s.first_air_date ? s.first_air_date.slice(0,4) : null,
+    description: s.overview ? s.overview.slice(0, 120) + (s.overview.length > 120 ? "..." : "") : null,
+    poster_url:  s.poster_path ? "https://image.tmdb.org/t/p/w92" + s.poster_path : null,
+    popularity:  s.popularity,
+  }));
+}
+
+// --- TMDB multi-result search (Movies) ----------------------------------
+async function tmdbMovieSearchResults(query) {
+  const key = getTmdbKey();
+  if (!key) return [];
+  const r = await fetch(
+    "https://api.themoviedb.org/3/search/movie?query=" + encodeURIComponent(query) +
+    "&language=en-US&page=1",
+    { headers: { Authorization: "Bearer " + key, accept: "application/json" } }
+  );
+  const d = await r.json();
+  return (d.results || []).slice(0, 8).map(m => ({
+    tmdb_id:     m.id,
+    title:       m.title,
+    year:        m.release_date ? m.release_date.slice(0,4) : null,
+    description: m.overview ? m.overview.slice(0, 120) + (m.overview.length > 120 ? "..." : "") : null,
+    poster_url:  m.poster_path ? "https://image.tmdb.org/t/p/w92" + m.poster_path : null,
+  }));
+}
+
+// --- Full TV series details + NL provider --------------------------------
+async function tmdbFetchFull(tmdbId) {
+  const key = getTmdbKey();
+  if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
+  const headers = { Authorization: "Bearer " + key, accept: "application/json" };
+  const base = "https://api.themoviedb.org/3/tv/" + tmdbId;
+  const [det, ext, prov] = await Promise.all([
+    fetch(base + "?language=en-US", { headers }).then(r => r.json()),
+    fetch(base + "/external_ids",   { headers }).then(r => r.json()),
+    fetchNLProvider("tv", tmdbId),
+  ]);
+  const imdbId  = ext.imdb_id || null;
+  const year    = det.first_air_date ? det.first_air_date.slice(0,4) : null;
+  const endYear = det.last_air_date  ? det.last_air_date.slice(0,4)  : null;
+  const yearStr = year && endYear && endYear !== year ? year + "-" + endYear : year;
+  const vote    = det.vote_average || null;
+  return {
+    title:             det.name,
+    year:              yearStr,
+    genres:            (det.genres || []).map(g => g.name),
+    description:       det.overview || null,
+    tmdb_rating:       vote ? parseFloat(vote).toFixed(1) + "/10" : null,
+    imdb_rating:       null,
+    imdb_url:          imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:        det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    streaming_service: prov ? prov.name : null,
+    streaming_url:     prov ? prov.url  : null,
+  };
+}
+
 // --- Service kleuren ------------------------------------------------------
 const SVC_COLORS = {
   netflix: "#e50914", "apple tv": "#1c1c1e", max: "#002be0", hbo: "#002be0",
@@ -1262,20 +1370,21 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
     }
   }, [sharedPayload]);
   const { guard, PinGate } = usePinGuard();
-  const [series, setSeries] = useState("");
-  const [streaming, setStreaming] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [series, setSeries]           = useState("");
+  const [loading, setLoading]         = useState(false);
+  const [searchResults, setSearchResults] = useState([]); // list to pick from
+  const [selecting, setSelecting]     = useState(false);  // loading full detail
+  const [result, setResult]           = useState(null);
+  const [selectedId, setSelectedId]   = useState(null);
+  const [error, setError]             = useState("");
+  const [saved, setSaved]             = useState(false);
   const [imdbUrlOverride, setImdbUrlOverride] = useState("");
-  const [imdbFetching,   setImdbFetching]   = useState(false);
-  const [imdbFetchErr,   setImdbFetchErr]   = useState("");
-  const [tmdbUrlInput,   setTmdbUrlInput]   = useState("");
-  const [tmdbFetching,   setTmdbFetching]   = useState(false);
-  const [tmdbFetchErr,   setTmdbFetchErr]   = useState("");
-  const [tmdbFetchOk,    setTmdbFetchOk]    = useState("");
+  const [imdbFetching,   setImdbFetching]     = useState(false);
+  const [imdbFetchErr,   setImdbFetchErr]     = useState("");
+  const [tmdbUrlInput,   setTmdbUrlInput]     = useState("");
+  const [tmdbFetching,   setTmdbFetching]     = useState(false);
+  const [tmdbFetchErr,   setTmdbFetchErr]     = useState("");
+  const [tmdbFetchOk,    setTmdbFetchOk]      = useState("");
 
   async function fetchFromTmdbUrl() {
     const id = extractTmdbId(tmdbUrlInput.trim());
@@ -1336,22 +1445,27 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
 
   async function doSearch() {
     if (!series.trim()) return;
-    setLoading(true); setError(""); setResult(null); setSaved(false); setStatus("AI zoekt op...");
+    setLoading(true); setError(""); setSearchResults([]); setResult(null);
+    setSaved(false); setSelectedId(null); setImdbUrlOverride(""); setTmdbFetchOk("");
     try {
-      const prompt =
-        'Geef informatie over de TV serie "' + series.trim() + '" op streamingdienst "' + (streaming.trim() || "onbekend") + '".\n\n' +
-        'Geef ALLEEN een raw JSON object terug:\n' +
-        '{"title":"string","year":"string of null","genres":["string"],' +
-        '"description":"2-3 zinnen Nederlands","imdb_rating":"X.X/10 of null",' +
-        '"imdb_url":"full IMDb URL or null",' +
-        '"streaming_service":"string","streaming_url":"url of null"}';
-      const text = await claude([{ role: "user", content: prompt }], 900, "You are a JSON-only API. Respond with raw JSON only. No explanation, no markdown, no code fences.");
-      const parsed = parseJsonObject(text);
-      setResult(parsed);
-      setImdbUrlOverride(parsed.imdb_url || "");
-      setStatus("");
-    } catch (e) { setError(e.message || "Probeer opnieuw."); setStatus(""); }
+      const results = await tmdbSearchResults(series.trim());
+      if (!results.length) {
+        setError("Geen resultaten gevonden. Probeer een andere zoekterm.");
+      } else {
+        setSearchResults(results);
+      }
+    } catch (e) { setError(e.message || "Zoeken mislukt"); }
     finally { setLoading(false); }
+  }
+
+  async function selectSeries(item) {
+    setSelectedId(item.tmdb_id); setSelecting(true); setResult(null);
+    setSaved(false); setImdbUrlOverride(""); setTmdbFetchOk("");
+    try {
+      const full = await tmdbFetchFull(item.tmdb_id);
+      setResult(full);
+    } catch (e) { setError(e.message || "Details ophalen mislukt"); setSelecting(false); }
+    finally { setSelecting(false); }
   }
 
   return (
@@ -1380,22 +1494,40 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
       <div className="s-form">
         <div className="field">
           <label className="flabel">TV Serie</label>
-          <input className="finput" placeholder="bv. Breaking Bad, Succession..." value={series}
-            onChange={e => { setSeries(e.target.value); setResult(null); setSaved(false); setImdbUrlOverride(""); setTmdbUrlInput(""); setTmdbFetchOk(""); setTmdbFetchErr(""); }}
-            onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
-        </div>
-        <div className="field">
-          <label className="flabel">Streamingdienst</label>
-          <input className="finput" placeholder="bv. Netflix, Disney+, Prime..." value={streaming}
-            onChange={e => setStreaming(e.target.value)}
+          <input className="finput" placeholder="bv. Breaking Bad, Succession, The Bear..."
+            value={series}
+            onChange={e => { setSeries(e.target.value); setSearchResults([]); setResult(null); setSaved(false); setImdbUrlOverride(""); setTmdbUrlInput(""); setTmdbFetchOk(""); setTmdbFetchErr(""); }}
             onKeyDown={e => e.key === "Enter" && !loading && doSearch()} />
         </div>
         <button className="btn-primary" onClick={doSearch} disabled={loading || !series.trim()}>
-          {loading ? <><span className="spin" />Zoeken...</> : "ZOEK INFORMATIE OP"}
+          {loading ? <><span className="spin" />Zoeken...</> : "Zoek series op"}
         </button>
-        {status && <div className="status-bar">[zoek] {status}</div>}
         {error && <div className="err-bar">! {error}</div>}
       </div>
+
+      {/* Results list */}
+      {searchResults.length > 0 && !result && (
+        <div className="search-results">
+          <div className="search-results-label">{searchResults.length} resultaten - kies een serie</div>
+          {searchResults.map(item => (
+            <div key={item.tmdb_id}
+              className={"result-row" + (selectedId === item.tmdb_id ? " selected" : "")}
+              onClick={() => selectSeries(item)}>
+              {item.poster_url
+                ? <img src={item.poster_url} alt={item.title} className="result-thumb" />
+                : <div className="result-thumb-ph">[film]</div>}
+              <div className="result-info">
+                <div className="result-title">{item.title}</div>
+                {item.year && <div className="result-year">{item.year}</div>}
+                {item.description && <div className="result-desc">{item.description}</div>}
+              </div>
+              {selecting && selectedId === item.tmdb_id
+                ? <span className="spin" style={{ flexShrink:0 }} />
+                : <span className="result-arrow">{">"}</span>}
+            </div>
+          ))}
+        </div>
+      )}
       {result && (
         <div className="result">
           <div className="rcard card">
@@ -1504,15 +1636,18 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
 
 // --- Film Search Section -------------------------------------------------
 function FilmSearchSection({ films, onSaveFilm, guard, sharedPayload, onClearShared }) {
-  const [filmTitle, setFilmTitle]     = useState("");
-  const [filmResult, setFilmResult]   = useState(null);
-  const [searching, setSearching]     = useState(false);
-  const [searchErr, setSearchErr]     = useState("");
-  const [saved, setSaved]             = useState(false);
-  const [imdbRating, setImdbRating]   = useState("");
-  const [tmdbUrlInput, setTmdbUrlInput] = useState("");
-  const [tmdbFetching, setTmdbFetching] = useState(false);
-  const [tmdbFetchErr, setTmdbFetchErr] = useState("");
+  const [filmTitle, setFilmTitle]         = useState("");
+  const [filmResults, setFilmResults]     = useState([]);
+  const [filmResult, setFilmResult]       = useState(null);
+  const [selectedId, setSelectedId]       = useState(null);
+  const [searching, setSearching]         = useState(false);
+  const [selecting, setSelecting]         = useState(false);
+  const [searchErr, setSearchErr]         = useState("");
+  const [saved, setSaved]                 = useState(false);
+  const [imdbRating, setImdbRating]       = useState("");
+  const [tmdbUrlInput, setTmdbUrlInput]   = useState("");
+  const [tmdbFetching, setTmdbFetching]   = useState(false);
+  const [tmdbFetchErr, setTmdbFetchErr]   = useState("");
 
   useEffect(() => {
     if (!sharedPayload) return;
@@ -1532,13 +1667,25 @@ function FilmSearchSection({ films, onSaveFilm, guard, sharedPayload, onClearSha
 
   async function doSearch() {
     if (!filmTitle.trim()) return;
-    setSearching(true); setSearchErr(""); setFilmResult(null); setSaved(false); setImdbRating("");
+    setSearching(true); setSearchErr(""); setFilmResults([]); setFilmResult(null);
+    setSaved(false); setSelectedId(null); setImdbRating("");
     try {
-      const r = await tmdbMovieSearch(filmTitle.trim());
-      if (!r) throw new Error("Film niet gevonden in TMDB. Probeer een TMDB-URL hieronder.");
-      setFilmResult(r);
+      const results = await tmdbMovieSearchResults(filmTitle.trim());
+      if (!results.length) throw new Error("Geen films gevonden. Probeer een andere zoekterm.");
+      setFilmResults(results);
     } catch (e) { setSearchErr(e.message || "Zoeken mislukt"); }
     finally { setSearching(false); }
+  }
+
+  async function selectFilm(item) {
+    setSelectedId(item.tmdb_id); setSelecting(true); setFilmResult(null); setSaved(false); setImdbRating("");
+    try {
+      const data = await fetchMovieFromTmdbId(item.tmdb_id);
+      // Also get NL streaming provider
+      const prov = await fetchNLProvider("movie", item.tmdb_id);
+      setFilmResult({ ...data, streaming_service: prov?.name || null, streaming_url: prov?.url || null });
+    } catch (e) { setSearchErr(e.message || "Details ophalen mislukt"); }
+    finally { setSelecting(false); }
   }
 
   async function doTmdbFetch() {
@@ -1570,14 +1717,44 @@ function FilmSearchSection({ films, onSaveFilm, guard, sharedPayload, onClearSha
       <div className="s-form">
         <div className="field">
           <label className="flabel">Filmtitel</label>
-          <input className="finput" placeholder="bv. Inception, The Dark Knight..."
+          <input className="finput" placeholder="bv. Inception, Oppenheimer, Her..."
             value={filmTitle}
-            onChange={e => { setFilmTitle(e.target.value); setFilmResult(null); setSaved(false); }}
+            onChange={e => { setFilmTitle(e.target.value); setFilmResults([]); setFilmResult(null); setSaved(false); }}
             onKeyDown={e => e.key === "Enter" && !searching && doSearch()} />
         </div>
         <button className="btn-primary" onClick={doSearch} disabled={searching || !filmTitle.trim()}>
           {searching ? <><span className="spin" />Zoeken...</> : "Zoek film op"}
         </button>
+        {searchErr && <div className="err-bar">{searchErr}</div>}
+      </div>
+
+      {/* Film results list */}
+      {filmResults.length > 0 && !filmResult && (
+        <div className="search-results">
+          <div className="search-results-label">{filmResults.length} resultaten - kies een film</div>
+          {filmResults.map(item => (
+            <div key={item.tmdb_id}
+              className={"result-row" + (selectedId === item.tmdb_id ? " selected" : "")}
+              onClick={() => selectFilm(item)}>
+              {item.poster_url
+                ? <img src={item.poster_url} alt={item.title} className="result-thumb" />
+                : <div className="result-thumb-ph">[film]</div>}
+              <div className="result-info">
+                <div className="result-title">{item.title}</div>
+                {item.year && <div className="result-year">{item.year}</div>}
+                {item.description && <div className="result-desc">{item.description}</div>}
+              </div>
+              {selecting && selectedId === item.tmdb_id
+                ? <span className="spin" style={{ flexShrink:0 }} />
+                : <span className="result-arrow">{">"}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Original s-form continues for TMDB URL fallback only */}
+      {!filmResult && (
+      <div className="s-form" style={{ marginTop: filmResults.length ? 8 : 0 }}>
         {searchErr && <div className="err-bar">{searchErr}</div>}
 
         {/* TMDB URL fallback */}
@@ -1602,6 +1779,7 @@ function FilmSearchSection({ films, onSaveFilm, guard, sharedPayload, onClearSha
           {tmdbFetchErr && <div style={{ fontSize:11, color:"#c82333", marginTop:5 }}>! {tmdbFetchErr}</div>}
         </div>
       </div>
+      )} {/* end !filmResult TMDB fallback */}
 
       {filmResult && (
         <div className="film-result">
