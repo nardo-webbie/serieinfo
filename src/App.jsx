@@ -1250,11 +1250,18 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
 
 
 // --- Film Card ----------------------------------------------------------
-// Cinema links near Dordrecht
+// Cinema links in Dordrecht (correct locations)
 const CINEMA_DORDRECHT = [
-  { name: "Pathe Dordrecht",   url: "https://www.pathe.nl/bioscoop/dordrecht" },
-  { name: "Vue Papendrecht",   url: "https://www.vuecinemas.nl/bioscoop/papendrecht" },
-  { name: "Filmhuis Dordrecht",url: "https://www.filmhuis-dordrecht.nl" },
+  {
+    name: "Kinepolis Dordrecht",
+    url:  "https://kinepolis.nl/bioscopen/kinepolis-dordrecht/",
+    hint: "Lijnbaan 200 - blockbusters & mainstream",
+  },
+  {
+    name: "Filmtheater De Witt",
+    url:  "https://www.dewittdordrecht.nl/",
+    hint: "Nieuwstraat 60-62 - art house & kwaliteitsfilm",
+  },
 ];
 
 function FilmCard({ film, onDelete, onToggleWatched }) {
@@ -1366,9 +1373,12 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
             <div className="avail-cinema-links">
               {CINEMA_DORDRECHT.map(c => (
                 <a key={c.name}
-                  href={c.url + (film.title ? "?q=" + encodeURIComponent(film.title) : "")}
+                  href={c.url}
                   target="_blank" rel="noopener noreferrer" className="avail-cinema">
-                  {c.name}
+                  <span>
+                    <span style={{ display:"block" }}>{c.name}</span>
+                    {c.hint && <span style={{ fontSize:10, opacity:.7, fontWeight:400 }}>{c.hint}</span>}
+                  </span>
                   <span>{">"}</span>
                 </a>
               ))}
