@@ -886,3 +886,50 @@ body {
   text-align: center; padding: 20px; color: #a8a29e; font-size: 14px;
   display: flex; align-items: center; justify-content: center; gap: 8px;
 }
+
+/* ==============================================
+   FILM AVAILABILITY PANEL
+   ============================================== */
+.avail-btn {
+  background: #f5f3ff; border: 1.5px solid #ddd6fe; border-radius: 7px;
+  color: #7c3aed; font-family: 'Inter', sans-serif; font-size: 11px;
+  font-weight: 600; padding: 5px 10px; cursor: pointer;
+  transition: all .15s; white-space: nowrap;
+}
+.avail-btn:hover { background: #ede9fe; border-color: #c4b5fd; }
+.avail-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.avail-panel {
+  background: #fff; border-top: 1px solid #f3f2f0;
+  padding: 14px 14px 12px; animation: fadeUp .2s ease;
+}
+.avail-section { margin-bottom: 10px; }
+.avail-section:last-child { margin-bottom: 0; }
+.avail-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: #a8a29e; margin-bottom: 6px;
+}
+.avail-providers { display: flex; flex-wrap: wrap; gap: 6px; }
+.avail-provider {
+  display: flex; align-items: center; gap: 5px;
+  background: #fafaf9; border: 1px solid #e7e5e4; border-radius: 7px;
+  padding: 5px 9px; text-decoration: none; font-size: 12px;
+  font-weight: 500; color: #1c1917; transition: all .15s;
+}
+.avail-provider:hover { background: #f3f2f0; border-color: #d6d3d1; }
+.avail-provider img { width: 18px; height: 18px; border-radius: 4px; }
+.avail-cinema-links { display: flex; flex-direction: column; gap: 5px; }
+.avail-cinema {
+  display: flex; align-items: center; justify-content: space-between;
+  background: #fff7ed; border: 1px solid #fed7aa; border-radius: 7px;
+  padding: 7px 10px; text-decoration: none;
+  font-size: 12px; font-weight: 500; color: #c2410c;
+  transition: all .15s;
+}
+.avail-cinema:hover { background: #ffedd5; }
+.avail-empty { font-size: 12px; color: #a8a29e; font-style: italic; }
+.avail-tmdb-link {
+  display: inline-block; margin-top: 8px; font-size: 11px;
+  color: #0369a1; text-decoration: none;
+}
+.avail-tmdb-link:hover { text-decoration: underline; }

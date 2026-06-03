@@ -371,7 +371,6 @@ const NL_PROVIDERS = {
 };
 
 async function fetchNLProvider(type, tmdbId) {
-  // type = "tv" or "movie"
   const key = getTmdbKey();
   if (!key) return null;
   try {
@@ -387,6 +386,35 @@ async function fetchNLProvider(type, tmdbId) {
     const provider = NL_PROVIDERS[flat[0].provider_name];
     return provider || { name: flat[0].provider_name, url: nl.link || "" };
   } catch { return null; }
+}
+
+// Fetch ALL NL watch providers (streaming + rent + buy)
+async function fetchAllNLProviders(tmdbId) {
+  const key = getTmdbKey();
+  if (!key) throw new Error("Geen TMDB API-sleutel ingesteld");
+  const r = await fetch(
+    "https://api.themoviedb.org/3/movie/" + tmdbId + "/watch/providers",
+    { headers: { Authorization: "Bearer " + key, accept: "application/json" } }
+  );
+  const d = await r.json();
+  const nl = d.results && d.results.NL;
+  if (!nl) return null;
+
+  function mapList(arr) {
+    return (arr || []).map(p => ({
+      name: NL_PROVIDERS[p.provider_name]?.name || p.provider_name,
+      url:  NL_PROVIDERS[p.provider_name]?.url  || nl.link || "",
+      logo: p.logo_path ? "https://image.tmdb.org/t/p/w45" + p.logo_path : null,
+    }));
+  }
+
+  return {
+    link:     nl.link || "",
+    flatrate: mapList(nl.flatrate),
+    rent:     mapList(nl.rent),
+    buy:      mapList(nl.buy),
+    free:     mapList(nl.free || nl.ads),
+  };
 }
 
 // --- TMDB multi-result search (TV) --------------------------------------
@@ -1222,11 +1250,56 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
 
 
 // --- Film Card ----------------------------------------------------------
+// Cinema links near Dordrecht
+const CINEMA_DORDRECHT = [
+  { name: "Pathe Dordrecht",   url: "https://www.pathe.nl/bioscoop/dordrecht" },
+  { name: "Vue Papendrecht",   url: "https://www.vuecinemas.nl/bioscoop/papendrecht" },
+  { name: "Filmhuis Dordrecht",url: "https://www.filmhuis-dordrecht.nl" },
+];
+
 function FilmCard({ film, onDelete, onToggleWatched }) {
   const { guard, PinGate } = usePinGuard();
+  const [avail,        setAvail]        = useState(null);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [availErr,     setAvailErr]     = useState("");
+  const [showAvail,    setShowAvail]    = useState(false);
 
-  function handleDelete() { guard(() => onDelete(film.id)); }
+  function handleDelete()  { guard(() => onDelete(film.id)); }
   function handleWatched() { guard(() => onToggleWatched(film.id)); }
+
+  async function checkAvailability() {
+    if (showAvail && avail) { setShowAvail(false); return; } // toggle
+    if (!film.tmdb_id) { setAvailErr("Geen TMDB ID  -  gebruik bewerken om het toe te voegen"); setShowAvail(true); return; }
+    setShowAvail(true);
+    if (avail) return; // already loaded
+    setAvailLoading(true); setAvailErr("");
+    try {
+      const data = await fetchAllNLProviders(film.tmdb_id);
+      setAvail(data);
+    } catch (e) { setAvailErr(e.message || "Ophalen mislukt"); }
+    finally { setAvailLoading(false); }
+  }
+
+  function ProviderList({ items, label }) {
+    if (!items || !items.length) return null;
+    return (
+      <div className="avail-section">
+        <div className="avail-label">{label}</div>
+        <div className="avail-providers">
+          {items.map((p, i) => (
+            <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" className="avail-provider">
+              {p.logo && <img src={p.logo} alt={p.name} />}
+              {p.name}
+            </a>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const hasStreaming = avail && (
+    avail.flatrate?.length || avail.free?.length || avail.rent?.length || avail.buy?.length
+  );
 
   return (
     <div className={"film-card" + (film.watched ? " watched" : "")}>
@@ -1248,17 +1321,67 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
         </div>
         {film.description && <div className="film-desc">{film.description}</div>}
       </div>
+
       <div className="film-actions">
         <input type="checkbox" className="film-cb" checked={!!film.watched}
           title={film.watched ? "Markeer als onbekeken" : "Markeer als bekeken"}
           onChange={handleWatched} />
+        <button className="avail-btn" onClick={checkAvailability} disabled={availLoading}>
+          {availLoading ? "..." : showAvail ? "Verberg" : "Waar te zien?"}
+        </button>
         {film.imdb_url && (
-          <a href={film.imdb_url} target="_blank" rel="noopener noreferrer" className="film-imdb-link">
-            IMDb
-          </a>
+          <a href={film.imdb_url} target="_blank" rel="noopener noreferrer" className="film-imdb-link">IMDb</a>
         )}
         <button className="film-del" title="Verwijder" onClick={handleDelete}>x</button>
       </div>
+
+      {/* Availability panel */}
+      {showAvail && (
+        <div className="avail-panel">
+          {availLoading && <div className="avail-empty"><span className="spin" />Opzoeken...</div>}
+          {availErr    && <div className="avail-empty" style={{ color:"#dc2626" }}>{availErr}</div>}
+          {avail && (
+            <>
+              {hasStreaming ? (
+                <>
+                  <ProviderList items={avail.flatrate} label="Inbegrepen bij abonnement" />
+                  <ProviderList items={avail.free}     label="Gratis te zien" />
+                  <ProviderList items={avail.rent}     label="Te huren" />
+                  <ProviderList items={avail.buy}      label="Te kopen" />
+                </>
+              ) : (
+                <div className="avail-empty">Niet beschikbaar op Nederlandse streamingdiensten.</div>
+              )}
+              {avail.link && (
+                <a href={avail.link} target="_blank" rel="noopener noreferrer" className="avail-tmdb-link">
+                  Alle opties op TMDB
+                </a>
+              )}
+            </>
+          )}
+
+          {/* Cinema links near Dordrecht */}
+          <div className="avail-section" style={{ marginTop: avail ? 12 : 0 }}>
+            <div className="avail-label">Bioscoop bij Dordrecht</div>
+            <div className="avail-cinema-links">
+              {CINEMA_DORDRECHT.map(c => (
+                <a key={c.name}
+                  href={c.url + (film.title ? "?q=" + encodeURIComponent(film.title) : "")}
+                  target="_blank" rel="noopener noreferrer" className="avail-cinema">
+                  {c.name}
+                  <span>{">"}</span>
+                </a>
+              ))}
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent((film.title || "") + " film bioscoop Dordrecht 2025")}
+                target="_blank" rel="noopener noreferrer" className="avail-cinema">
+                Google: bioscoop Dordrecht
+                <span>{">"}</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
       <PinGate />
     </div>
   );
