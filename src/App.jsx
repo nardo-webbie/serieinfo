@@ -2198,18 +2198,24 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    // Merge cloud + local: cloud wins on conflict (by id), local keeps items not in cloud
-    if (Array.isArray(newLibrary)) {
-      const cloudIds = new Set(newLibrary.map(i => i.id));
-      const localOnly = library.filter(i => !cloudIds.has(i.id));
-      const merged = [...newLibrary, ...localOnly];
-      setLibrary(merged); saveLib(merged);
+    // Use functional updater (prev =>) to avoid stale closure bugs
+    if (Array.isArray(newLibrary) && newLibrary.length > 0) {
+      setLibrary(prev => {
+        const cloudIds  = new Set(newLibrary.map(i => i.id));
+        const localOnly = prev.filter(i => !cloudIds.has(i.id));
+        const merged    = [...newLibrary, ...localOnly];
+        saveLib(merged);
+        return merged;
+      });
     }
-    if (Array.isArray(newFilms)) {
-      const cloudIds = new Set(newFilms.map(f => f.id));
-      const localOnly = films.filter(f => !cloudIds.has(f.id));
-      const merged = [...newFilms, ...localOnly];
-      setFilms(merged); saveFilms(merged);
+    if (Array.isArray(newFilms) && newFilms.length > 0) {
+      setFilms(prev => {
+        const cloudIds  = new Set(newFilms.map(f => f.id));
+        const localOnly = prev.filter(f => !cloudIds.has(f.id));
+        const merged    = [...newFilms, ...localOnly];
+        saveFilms(merged);
+        return merged;
+      });
     }
   }
   function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
