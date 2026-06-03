@@ -164,19 +164,30 @@ function SyncBar({ library, films, onImport }) {
   const [msg,      setMsg]      = useState("");
   const [lastSync, setLastSync] = useState(null);
 
-  // Auto-sync 2s after any change when enabled  -  skip if local data is empty
+  // Refs always hold the latest values - avoids stale closure in setTimeout
+  const libRef   = useRef(library);
+  const filmsRef = useRef(films);
+  useEffect(() => { libRef.current   = library; }, [library]);
+  useEffect(() => { filmsRef.current = films;   }, [films]);
+
+  // Auto-sync 2s after any change when enabled - skip if local data is empty
   useEffect(() => {
     if (!enabled) return;
-    if (library.length === 0 && films.length === 0) return; // don't wipe cloud with empty data
-    const timer = setTimeout(() => doPush(library, films), 2000);
+    if (library.length === 0 && films.length === 0) return;
+    const timer = setTimeout(() => doPush(), 2000);
     return () => clearTimeout(timer);
   }, [library, films, enabled]);
 
-  async function doPush(lib, fms) {
+  // Always reads latest state via ref - never stale
+  async function doPush() {
+    const lib = libRef.current;
+    const fms = filmsRef.current;
+    if (lib.length === 0 && fms.length === 0) return;
     setStatus("syncing"); setMsg("");
     try {
       await cloudPut({ library: lib, films: fms });
       setStatus("ok"); setLastSync(new Date());
+      setMsg(lib.length + " series, " + fms.length + " films opgeslagen in cloud");
     } catch (e) {
       setStatus("error");
       setMsg(e.message.slice(0, 80));
@@ -261,7 +272,7 @@ function SyncBar({ library, films, onImport }) {
         </label>
         {enabled && (
           <>
-            <button className="sync-btn primary" onClick={() => doPush(library, films)} disabled={status === "syncing"}>
+            <button className="sync-btn primary" onClick={() => doPush()} disabled={status === "syncing"}>
               {status === "syncing" ? "Bezig..." : "Stuur naar cloud"}
             </button>
             <button className="sync-btn" onClick={pullFromCloud} disabled={status === "syncing"}>
