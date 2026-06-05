@@ -2248,15 +2248,29 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    // Cloud wins completely  -  no merge, just replace
-    // This ensures a pull always shows exactly what is in the cloud
+    // Cloud wins for content, watched uses OR-merge:
+    // once watched on any device = stays watched everywhere
+    function mergeWatched(cloudItems, localItems) {
+      const localById = {};
+      localItems.forEach(i => { localById[i.id] = i; });
+      return cloudItems.map(item => ({
+        ...item,
+        watched: !!(item.watched || localById[item.id]?.watched),
+      }));
+    }
     if (Array.isArray(newLibrary) && newLibrary.length > 0) {
-      saveLib(newLibrary);
-      setLibrary([...newLibrary]);
+      setLibrary(prev => {
+        const merged = mergeWatched(newLibrary, prev);
+        saveLib(merged);
+        return merged;
+      });
     }
     if (Array.isArray(newFilms) && newFilms.length > 0) {
-      saveFilms(newFilms);
-      setFilms([...newFilms]);
+      setFilms(prev => {
+        const merged = mergeWatched(newFilms, prev);
+        saveFilms(merged);
+        return merged;
+      });
     }
   }
   function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
