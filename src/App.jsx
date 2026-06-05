@@ -211,7 +211,7 @@ function SyncBar({ library, films, onImport }) {
       const filmsCount  = cloudFilms ? cloudFilms.length : 0;
       setStatus("ok");
       setLastSync(new Date());
-      setMsg(seriesCount + " series, " + filmsCount + " films opgehaald");
+      setMsg(seriesCount + " series en " + filmsCount + " films geladen uit cloud");
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     }
@@ -2209,24 +2209,15 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    // Use functional updater (prev =>) to avoid stale closure bugs
+    // Cloud wins completely — no merge, just replace
+    // This ensures a pull always shows exactly what is in the cloud
     if (Array.isArray(newLibrary) && newLibrary.length > 0) {
-      setLibrary(prev => {
-        const cloudIds  = new Set(newLibrary.map(i => i.id));
-        const localOnly = prev.filter(i => !cloudIds.has(i.id));
-        const merged    = [...newLibrary, ...localOnly];
-        saveLib(merged);
-        return merged;
-      });
+      saveLib(newLibrary);
+      setLibrary([...newLibrary]);
     }
     if (Array.isArray(newFilms) && newFilms.length > 0) {
-      setFilms(prev => {
-        const cloudIds  = new Set(newFilms.map(f => f.id));
-        const localOnly = prev.filter(f => !cloudIds.has(f.id));
-        const merged    = [...newFilms, ...localOnly];
-        saveFilms(merged);
-        return merged;
-      });
+      saveFilms(newFilms);
+      setFilms([...newFilms]);
     }
   }
   function deleteFilm(id) { const u = films.filter(f => f.id !== id); setFilms(u); saveFilms(u); }
