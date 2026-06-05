@@ -1994,11 +1994,44 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
   const [phase,      setPhase]      = useState("idle");
   const [savedCount, setSavedCount] = useState(0);
   const [enriched,   setEnriched]   = useState(0);
-  const [current,    setCurrent]    = useState("");   // title currently being processed
+  const [current,    setCurrent]    = useState("");
   const [errors,     setErrors]     = useState([]);
   const [tmdbKey,    setTmdbKeyState] = useState(getTmdbKey);
+  const [cloudList,  setCloudList]  = useState(null); // null = not loaded, [] = loaded
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudErr,   setCloudErr]   = useState("");
   const running = useRef(false);
-  const pct = phase === "step2" ? Math.round((enriched / IMPORT_LIST.length) * 100) : phase === "done" ? 100 : 0;
+
+  // Use cloud list if available, else fall back to hardcoded IMPORT_LIST
+  const sourceList = cloudList && cloudList.length > 0 ? cloudList : IMPORT_LIST;
+  const pct = phase === "step2" ? Math.round((enriched / sourceList.length) * 100) : phase === "done" ? 100 : 0;
+
+  // Load import list from cloud on mount
+  useEffect(() => {
+    async function loadCloudList() {
+      setCloudLoading(true); setCloudErr("");
+      try {
+        const d = await cloudGet();
+        if (d && Array.isArray(d.library) && d.library.length > 0) {
+          // Extract just the fields needed for import
+          const list = d.library.map(item => ({
+            title:             item.title,
+            streaming_service: item.streaming_service || "",
+            streaming_url:     item.streaming_url     || "",
+          })).filter(s => s.title);
+          setCloudList(list);
+        } else {
+          setCloudList([]); // cloud empty, use hardcoded list
+        }
+      } catch {
+        setCloudList([]); // error, use hardcoded list
+        setCloudErr("Cloud niet bereikbaar - vaste lijst wordt gebruikt");
+      } finally {
+        setCloudLoading(false);
+      }
+    }
+    loadCloudList();
+  }, []);
 
   function saveTmdbKey(k) { setTmdbKey(k); setTmdbKeyState(k); }
 
@@ -2013,7 +2046,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
     setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0); setCurrent("");
 
     const existingTitles = new Set(currentLibrary.map(e => (e.title || "").toLowerCase()));
-    const basic = IMPORT_LIST.filter(s => !existingTitles.has(s.title.toLowerCase()))
+    const basic = sourceList.filter(s => !existingTitles.has(s.title.toLowerCase()))
       .map((s, i) => ({
         id: "imp" + Date.now() + i, title: s.title,
         streaming_service: s.streaming_service, streaming_url: s.streaming_url,
@@ -2029,7 +2062,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
     let working = [...merged];
 
     // Process each series individually  -  TMDB first, Claude as fallback
-    const toEnrich = IMPORT_LIST.filter(s => {
+    const toEnrich = sourceList.filter(s => {
       const found = working.find(w => w.title.toLowerCase() === s.title.toLowerCase());
       return found && !found.enriched;
     });
@@ -2103,9 +2136,15 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
 
         {phase === "idle" && (
           <div className="imp-card">
+            {cloudLoading && <p style={{ fontSize:12, color:"#a8a29e", marginBottom:8 }}><span className="spin"/>Importlijst ophalen uit cloud...</p>}
+            {cloudErr    && <p style={{ fontSize:12, color:"#f59e0b", marginBottom:8 }}>! {cloudErr}</p>}
             <p style={{ fontSize: 13, color: "#6e6e73", lineHeight: 1.7, marginBottom: 14 }}>
-              <strong>{IMPORT_LIST.length} series</strong> worden een voor een opgezocht.<br />
-              {tmdbKey ? "v TMDB actief  -  hoge nauwkeurigheid." : "! Geen TMDB-sleutel  -  alleen AI als fallback."}<br />
+              <strong>{sourceList.length} series</strong>
+              {" "}{cloudList && cloudList.length > 0
+                ? <span style={{ color:"#16a34a", fontSize:12 }}>v uit cloud geladen</span>
+                : <span style={{ color:"#a8a29e", fontSize:12 }}>(vaste lijst)</span>
+              }<br />
+              {tmdbKey ? "v TMDB actief." : "! Geen TMDB-sleutel - alleen AI als fallback."}<br />
               Bibliotheek is direct zichtbaar, verrijking loopt op de achtergrond.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -2131,7 +2170,7 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
                 </div>
                 <div className="bar-bg"><div className="bar" style={{ width: pct + "%" }} /></div>
                 <div className="prog-sub">
-                  {enriched} van {IMPORT_LIST.length} verwerkt
+                  {enriched} van {sourceList.length} verwerkt
                   {current && <span style={{ marginLeft:8, color:"#aaa" }}>. {current}</span>}
                 </div>
               </>
@@ -2209,7 +2248,7 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    // Cloud wins completely — no merge, just replace
+    // Cloud wins completely  -  no merge, just replace
     // This ensures a pull always shows exactly what is in the cloud
     if (Array.isArray(newLibrary) && newLibrary.length > 0) {
       saveLib(newLibrary);
