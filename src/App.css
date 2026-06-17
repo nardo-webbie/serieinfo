@@ -958,3 +958,11 @@ body {
   font-size: 11px; color: #a8a29e; font-weight: 500;
   margin-left: 4px; white-space: nowrap;
 }
+
+/* ==============================================
+   STREAMING SERVICE LOGO (next to TMDB rating)
+   ============================================== */
+.svc-logo {
+  width: 16px; height: 16px; border-radius: 4px;
+  object-fit: cover; flex-shrink: 0; vertical-align: middle;
+}

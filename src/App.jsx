@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import "./App.css";
 
@@ -61,12 +61,13 @@ async function tmdbSearch(title) {
   const show = sd.results[0];
   const id   = show.id;
 
-  // 2. Details + external IDs in parallel
-  const [det, ext] = await Promise.all([
+  // 2. Details + external IDs + NL provider in parallel
+  const [det, ext, prov] = await Promise.all([
     fetch("https://api.themoviedb.org/3/tv/" + id + "?language=en-US",
       { headers: { Authorization: "Bearer " + key, accept: "application/json" } }).then(r => r.json()),
     fetch("https://api.themoviedb.org/3/tv/" + id + "/external_ids",
       { headers: { Authorization: "Bearer " + key, accept: "application/json" } }).then(r => r.json()),
+    fetchNLProvider("tv", id),
   ]);
 
   const imdbId  = ext.imdb_id || null;
@@ -76,15 +77,18 @@ async function tmdbSearch(title) {
 
   const voteAvg = det.vote_average || show.vote_average || null;
   return {
-    title:        det.name || show.name,
-    year:         yearStr,
-    genres:       (det.genres || []).map(g => g.name),
-    description:  show.overview || det.overview || null,
-    imdb_rating:  null,
-    tmdb_rating:  voteAvg ? voteAvg.toFixed(1) + "/10" : null,
-    imdb_url:     imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
-    poster_url:   show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
-    season_count: det.number_of_seasons || null,
+    title:             det.name || show.name,
+    year:              yearStr,
+    genres:            (det.genres || []).map(g => g.name),
+    description:       show.overview || det.overview || null,
+    imdb_rating:       null,
+    tmdb_rating:       voteAvg ? voteAvg.toFixed(1) + "/10" : null,
+    imdb_url:          imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:        show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
+    season_count:      det.number_of_seasons || null,
+    streaming_service:  prov ? prov.name : null,
+    streaming_url:      prov ? prov.url  : null,
+    streaming_logo:      prov ? prov.logo : null,
   };
 }
 
@@ -395,8 +399,13 @@ async function fetchNLProvider(type, tmdbId) {
     if (!nl) return null;
     const flat = nl.flatrate || nl.ads || nl.free || [];
     if (!flat.length) return null;
-    const provider = NL_PROVIDERS[flat[0].provider_name];
-    return provider || { name: flat[0].provider_name, url: nl.link || "" };
+    const tmdbProvider = flat[0];
+    const mapped = NL_PROVIDERS[tmdbProvider.provider_name];
+    return {
+      name: mapped ? mapped.name : tmdbProvider.provider_name,
+      url:  mapped ? mapped.url  : (nl.link || ""),
+      logo: tmdbProvider.logo_path ? "https://image.tmdb.org/t/p/w45" + tmdbProvider.logo_path : null,
+    };
   } catch { return null; }
 }
 
@@ -495,6 +504,7 @@ async function tmdbFetchFull(tmdbId) {
     poster_url:        det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
     streaming_service: prov ? prov.name : null,
     streaming_url:     prov ? prov.url  : null,
+    streaming_logo:    prov ? prov.logo : null,
     season_count:      det.number_of_seasons || null,
   };
 }
@@ -527,6 +537,63 @@ function isFullyWatched(item) {
 }
 function watchedSeasonCount(item) {
   return (item.watched_seasons || []).length;
+}
+
+// --- Duplicate detection & merging ---------------------------------------
+function normalizeTitle(t) {
+  return (t || "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+// Higher score = more complete data
+function detailScore(item) {
+  let score = 0;
+  if (item.year) score++;
+  if (item.genres && item.genres.length) score += item.genres.length;
+  if (item.description) score += item.description.length > 20 ? 2 : 1;
+  if (item.tmdb_rating) score++;
+  if (item.imdb_rating) score++;
+  if (item.imdb_url) score++;
+  if (item.poster_url) score++;
+  if (item.season_count) score++;
+  if (item.streaming_service) score++;
+  if (item.streaming_url) score++;
+  if (item.enriched) score++;
+  return score;
+}
+
+// Find groups of items sharing the same normalized title (only groups with 2+)
+function findDuplicateGroups(library) {
+  const byTitle = {};
+  library.forEach(item => {
+    const key = normalizeTitle(item.title);
+    if (!key) return;
+    if (!byTitle[key]) byTitle[key] = [];
+    byTitle[key].push(item);
+  });
+  return Object.values(byTitle)
+    .filter(group => group.length > 1)
+    .map(group => [...group].sort((a, b) => detailScore(b) - detailScore(a)));
+}
+
+// Merge a duplicate group into one item: best available field per slot,
+// watched status is OR-merged (union) so progress is never lost.
+function mergeDuplicateGroup(sortedGroup) {
+  const base = { ...sortedGroup[0] }; // highest-scoring item as primary identity
+  for (const it of sortedGroup) {
+    if (!base.year && it.year) base.year = it.year;
+    if ((!base.genres || !base.genres.length) && it.genres && it.genres.length) base.genres = it.genres;
+    if (!base.description || (it.description && it.description.length > base.description.length)) base.description = it.description || base.description;
+    if (!base.tmdb_rating && it.tmdb_rating) base.tmdb_rating = it.tmdb_rating;
+    if (!base.imdb_rating && it.imdb_rating) base.imdb_rating = it.imdb_rating;
+    if (!base.imdb_url && it.imdb_url) base.imdb_url = it.imdb_url;
+    if (!base.poster_url && it.poster_url) base.poster_url = it.poster_url;
+    if (!base.season_count && it.season_count) base.season_count = it.season_count;
+    if (!base.streaming_service && it.streaming_service) base.streaming_service = it.streaming_service;
+    if (!base.streaming_url && it.streaming_url) base.streaming_url = it.streaming_url;
+  }
+  base.watched_seasons = [...new Set(sortedGroup.flatMap(i => i.watched_seasons || []))].sort((a, b) => a - b);
+  base.watched = sortedGroup.some(i => i.watched) || base.watched;
+  return base;
 }
 
 function parseJsonArray(text) {
@@ -764,7 +831,9 @@ function DetailModal({ item, onClose, onDelete }) {
         <div className="modal-header">
           <div className="modal-title">{item.title}</div>
           <div className="svc-chip">
-            <div className="svc-dot" style={{ background: svcColor(item.streaming_service) }} />
+            {item.streaming_logo
+              ? <img src={item.streaming_logo} alt={item.streaming_service || ""} className="svc-logo" />
+              : <div className="svc-dot" style={{ background: svcColor(item.streaming_service) }} />}
             <span className="svc-name">{item.streaming_service}</span>
           </div>
         </div>
@@ -833,9 +902,10 @@ async function fetchFromTmdbId(tmdbId) {
   const headers = { Authorization: "Bearer " + key, accept: "application/json" };
   const base = "https://api.themoviedb.org/3/tv/" + tmdbId;
 
-  const [det, ext] = await Promise.all([
+  const [det, ext, prov] = await Promise.all([
     fetch(base + "?language=en-US", { headers }).then(r => r.json()),
     fetch(base + "/external_ids",   { headers }).then(r => r.json()),
+    fetchNLProvider("tv", tmdbId),
   ]);
 
   if (det.success === false) throw new Error("Serie niet gevonden op TMDB (ID " + tmdbId + ")");
@@ -847,16 +917,19 @@ async function fetchFromTmdbId(tmdbId) {
 
   const voteAvg = det.vote_average || null;
   return {
-    title:        det.name || null,
-    year:         yearStr,
-    genres:       (det.genres || []).map(g => g.name),
-    description:  det.overview || null,
-    imdb_rating:  null,
-    tmdb_rating:  voteAvg ? voteAvg.toFixed(1) + "/10" : null,
-    imdb_url:     imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
-    poster_url:   det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
-    season_count: det.number_of_seasons || null,
-    source:       "tmdb",
+    title:             det.name || null,
+    year:              yearStr,
+    genres:            (det.genres || []).map(g => g.name),
+    description:       det.overview || null,
+    imdb_rating:       null,
+    tmdb_rating:       voteAvg ? voteAvg.toFixed(1) + "/10" : null,
+    imdb_url:          imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:        det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    season_count:      det.number_of_seasons || null,
+    streaming_service: prov ? prov.name : null,
+    streaming_url:     prov ? prov.url  : null,
+    streaming_logo:    prov ? prov.logo : null,
+    source:            "tmdb",
   };
 }
 
@@ -905,6 +978,95 @@ async function researchSeries(title, streamingService) {
 }
 
 // --- Edit Modal ------------------------------------------------------------
+// --- Duplicates Modal ------------------------------------------------------
+function DuplicatesModal({ library, onResolve, onClose }) {
+  const groups = useMemo(() => findDuplicateGroups(library), [library]);
+  const [resolved, setResolved] = useState(false);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  const totalToRemove = groups.reduce((sum, g) => sum + (g.length - 1), 0);
+
+  function handleConfirm() {
+    const plan = groups.map(group => ({
+      merged:    mergeDuplicateGroup(group),
+      removeIds: group.slice(1).map(i => i.id),
+      keepId:    group[0].id,
+    }));
+    onResolve(plan);
+    setResolved(true);
+  }
+
+  const content = (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <button className="modal-close" onClick={onClose}>x</button>
+        <div className="modal-header">
+          <div className="modal-title">Duplicaten controleren</div>
+        </div>
+        <div className="modal-body">
+          {groups.length === 0 ? (
+            <p style={{ fontSize:14, color:"#78716c" }}>Geen duplicaten gevonden. Elke titel komt maar 1 keer voor.</p>
+          ) : resolved ? (
+            <p style={{ fontSize:14, color:"#16a34a" }}>v {totalToRemove} duplicaten verwijderd en samengevoegd.</p>
+          ) : (
+            <>
+              <p style={{ fontSize:13, color:"#78716c", lineHeight:1.6 }}>
+                <strong>{groups.length}</strong> titel{groups.length !== 1 ? "s" : ""} met duplicaten gevonden ({totalToRemove} te verwijderen).
+                De meest volledige versie wordt behouden; bekeken-status van alle versies wordt samengevoegd.
+              </p>
+              <div style={{ display:"flex", flexDirection:"column", gap:14, maxHeight:"50vh", overflowY:"auto" }}>
+                {groups.map((group, gi) => (
+                  <div key={gi} style={{ border:"1.5px solid #f3f2f0", borderRadius:12, padding:12 }}>
+                    <div style={{ fontFamily:"Playfair Display,serif", fontWeight:700, fontSize:15, marginBottom:8 }}>
+                      {group[0].title}
+                    </div>
+                    {group.map((item, idx) => (
+                      <div key={item.id} style={{
+                        display:"flex", alignItems:"center", gap:8, padding:"6px 0",
+                        opacity: idx === 0 ? 1 : .55,
+                      }}>
+                        <span style={{
+                          fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:5,
+                          background: idx === 0 ? "#dcfce7" : "#fef2f2",
+                          color:      idx === 0 ? "#16a34a" : "#dc2626",
+                          flexShrink:0,
+                        }}>
+                          {idx === 0 ? "BEHOUDEN" : "VERWIJDEREN"}
+                        </span>
+                        <span style={{ fontSize:12, color:"#57534e" }}>
+                          {item.year || "geen jaar"} - score {detailScore(item)}
+                          {item.streaming_service ? " - " + item.streaming_service : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="modal-footer">
+          {groups.length > 0 && !resolved && (
+            <button className="btn-primary" style={{ flex:1 }} onClick={handleConfirm}>
+              Verwijder {totalToRemove} duplicaten
+            </button>
+          )}
+          <button className="btn-secondary" onClick={onClose}>
+            {resolved || groups.length === 0 ? "Sluiten" : "Annuleren"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return createPortal(content, document.body);
+}
+
 function EditModal({ item, onSave, onClose }) {
   const { guard, PinGate } = usePinGuard();
   const [form, setForm] = useState({
@@ -1174,7 +1336,7 @@ function EditModal({ item, onSave, onClose }) {
 
 
 // --- Library ---------------------------------------------------------------
-function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggleSeason, onMarkAllSeasons, onUpdate, onGo }) {
+function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggleSeason, onMarkAllSeasons, onUpdate, onGo, onDeduplicate }) {
   const { guard, PinGate } = usePinGuard();
   const [q, setQ] = useState("");
   const [svc, setSvc] = useState("");
@@ -1182,6 +1344,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
   const [hideWatched, setHideWatched] = useState(false);
   const [sel, setSel] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [showDupes, setShowDupes] = useState(false);
 
   useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
@@ -1220,8 +1383,18 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
           >
             {hideWatched ? "v Bekeken verborgen" : "[oog] Verberg bekeken"}
           </button>
+          <button className="fb" onClick={() => setShowDupes(true)} title="Zoek series met dezelfde titel">
+            Check duplicaten
+          </button>
         </div>
       </div>
+      {showDupes && (
+        <DuplicatesModal
+          library={library}
+          onResolve={onDeduplicate}
+          onClose={() => setShowDupes(false)}
+        />
+      )}
       <div className="lbody">
         {library.length === 0 ? (
           <div className="empty">
@@ -1291,12 +1464,20 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
                   </div>
                   <div className="lrow-right">
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div className="lrow-svc">{item.streaming_service}</div>
                       <button className="lrow-del" title="Verwijder" onClick={e => { e.stopPropagation(); guard(() => onDelete(item.id)); }}>x</button>
                       <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>/</button>
                     </div>
                     <div className="lrow-btns">
-                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>TMDB {item.tmdb_rating}</span>}</>}
+                      {!isEnriching && <>{item.tmdb_rating && (
+                        <span className="lrow-r imdb" style={{ color:"#0066cc" }}>
+                          {item.streaming_logo
+                            ? <img src={item.streaming_logo} alt={item.streaming_service || ""} className="svc-logo" title={item.streaming_service || ""} />
+                            : item.streaming_service
+                              ? <span className="svc-dot" style={{ background: svcColor(item.streaming_service) }} title={item.streaming_service} />
+                              : null}
+                          TMDB {item.tmdb_rating}
+                        </span>
+                      )}</>}
                       {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>Bekijk</a>}
                     </div>
                   </div>
@@ -1615,6 +1796,7 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
         poster_url:        data.poster_url        || prev?.poster_url  || null,
         streaming_service: prov?.name             || prev?.streaming_service || null,
         streaming_url:     prov?.url              || prev?.streaming_url     || null,
+        streaming_logo:    prov?.logo             || prev?.streaming_logo    || null,
       }));
       const typeLabel = type === "movie" ? "Film" : "Serie";
       setTmdbFetchOk("v " + typeLabel + ": " + (data.title || "Gevonden") + (data.year ? " (" + data.year + ")" : ""));
@@ -1748,7 +1930,7 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
           <div className="rcard card">
             <div className="rcard-header">
               <div className="rtitle">{result.title}</div>
-              <div className="svc-chip"><div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} /><span className="svc-name">{result.streaming_service}</span></div>
+              <div className="svc-chip">{result.streaming_logo ? <img src={result.streaming_logo} alt={result.streaming_service || ""} className="svc-logo" /> : <div className="svc-dot" style={{ background: svcColor(result.streaming_service) }} />}<span className="svc-name">{result.streaming_service}</span></div>
             </div>
             <div className="rmeta">
               {result.year && <span className="ytag">{result.year}</span>}
@@ -1898,18 +2080,21 @@ function FilmSearchSection({ films, onSaveFilm, guard, sharedPayload, onClearSha
       const data = await fetchMovieFromTmdbId(item.tmdb_id);
       // Also get NL streaming provider
       const prov = await fetchNLProvider("movie", item.tmdb_id);
-      setFilmResult({ ...data, streaming_service: prov?.name || null, streaming_url: prov?.url || null });
+      setFilmResult({ ...data, streaming_service: prov?.name || null, streaming_url: prov?.url || null, streaming_logo: prov?.logo || null });
     } catch (e) { setSearchErr(e.message || "Details ophalen mislukt"); }
     finally { setSelecting(false); }
   }
 
   async function doTmdbFetch() {
-    const id = extractTmdbId(tmdbUrlInput.trim());
-    if (!id) { setTmdbFetchErr("Geen TMDB-ID gevonden in de URL"); return; }
+    const id = extractTmdbMovieId(tmdbUrlInput.trim());
+    if (!id) { setTmdbFetchErr("Geen geldig TMDB-ID in de URL (gebruik een themoviedb.org/movie/... URL)"); return; }
     setTmdbFetching(true); setTmdbFetchErr("");
     try {
-      const data = await fetchMovieFromTmdbId(id);
-      setFilmResult(data);
+      const [data, prov] = await Promise.all([
+        fetchMovieFromTmdbId(id),
+        fetchNLProvider("movie", id),
+      ]);
+      setFilmResult({ ...data, streaming_service: prov?.name || null, streaming_url: prov?.url || null, streaming_logo: prov?.logo || null });
       setSaved(false);
     } catch (e) { setTmdbFetchErr(e.message || "Ophalen mislukt"); }
     finally { setTmdbFetching(false); }
@@ -2139,8 +2324,11 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
             imdb_rating:  data.imdb_rating  || working[idx].imdb_rating,
             tmdb_rating:  data.tmdb_rating  || working[idx].tmdb_rating  || null,
             imdb_url:     data.imdb_url     || working[idx].imdb_url,
-            poster_url:   data.poster_url   || working[idx].poster_url,
-            season_count: data.season_count || working[idx].season_count || null,
+            poster_url:        data.poster_url        || working[idx].poster_url,
+            season_count:      data.season_count       || working[idx].season_count      || null,
+            streaming_service: data.streaming_service  || working[idx].streaming_service  || null,
+            streaming_url:     data.streaming_url      || working[idx].streaming_url      || null,
+            streaming_logo:    data.streaming_logo     || working[idx].streaming_logo     || null,
             enriched: true,
           };
         }
@@ -2380,6 +2568,20 @@ export default function App() {
     setLibrary(u); saveLib(u);
   }
 
+  // Apply a duplicate-resolution plan: replace the keeper with merged data,
+  // remove all other items in each group
+  function deduplicateLibrary(plan) {
+    const removeIds = new Set(plan.flatMap(p => p.removeIds));
+    const mergedById = {};
+    plan.forEach(p => { mergedById[p.keepId] = p.merged; });
+
+    const u = library
+      .filter(i => !removeIds.has(i.id))
+      .map(i => mergedById[i.id] ? mergedById[i.id] : i);
+
+    setLibrary(u); saveLib(u);
+  }
+
   return (
     <>
       <div style={{ minHeight: "100vh", background: "#f8f7f5" }}>
@@ -2401,7 +2603,7 @@ export default function App() {
           <FilmLibraryPage films={films} onDelete={deleteFilm}
             onToggleWatched={toggleFilmWatched} onGo={setPage} />
         )}
-        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onToggleSeason={toggleSeasonWatched} onMarkAllSeasons={markAllSeasonsWatched} onUpdate={updateItem} onGo={setPage} />}
+        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onToggleSeason={toggleSeasonWatched} onMarkAllSeasons={markAllSeasonsWatched} onUpdate={updateItem} onGo={setPage} onDeduplicate={deduplicateLibrary} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
       <SyncBar library={library} films={films} onImport={importFromCloud} />
