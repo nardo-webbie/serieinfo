@@ -1644,10 +1644,11 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
 }
 
 // --- Film Library Page --------------------------------------------------
-function FilmLibraryPage({ films, onDelete, onToggleWatched, onGo }) {
-  const [q, setQ]                   = useState("");
-  const [sort, setSort]             = useState("recent");
+function FilmLibraryPage({ films, onDelete, onToggleWatched, onGo, onDeduplicate }) {
+  const [q, setQ]                     = useState("");
+  const [sort, setSort]               = useState("recent");
   const [hideWatched, setHideWatched] = useState(false);
+  const [showDupes, setShowDupes]     = useState(false);
 
   const watchedCount = films.filter(f => f.watched).length;
 
@@ -1684,8 +1685,18 @@ function FilmLibraryPage({ films, onDelete, onToggleWatched, onGo }) {
             onClick={() => setHideWatched(h => !h)}>
             {hideWatched ? "v Verborgen" : "[oog] Verberg bekeken"}
           </button>
+          <button className="fb" onClick={() => setShowDupes(true)} title="Zoek films met dezelfde titel">
+            Check duplicaten
+          </button>
         </div>
       </div>
+      {showDupes && (
+        <DuplicatesModal
+          library={films}
+          onResolve={onDeduplicate}
+          onClose={() => setShowDupes(false)}
+        />
+      )}
 
       {films.length === 0 ? (
         <div className="film-empty">
@@ -2582,6 +2593,19 @@ export default function App() {
     setLibrary(u); saveLib(u);
   }
 
+  // Same duplicate-resolution logic, applied to the films array
+  function deduplicateFilms(plan) {
+    const removeIds = new Set(plan.flatMap(p => p.removeIds));
+    const mergedById = {};
+    plan.forEach(p => { mergedById[p.keepId] = p.merged; });
+
+    const u = films
+      .filter(f => !removeIds.has(f.id))
+      .map(f => mergedById[f.id] ? mergedById[f.id] : f);
+
+    setFilms(u); saveFilms(u);
+  }
+
   return (
     <>
       <div style={{ minHeight: "100vh", background: "#f8f7f5" }}>
@@ -2601,7 +2625,7 @@ export default function App() {
         {page === "search" && <SearchPage library={library} films={films} onSave={addItem} onSaveFilm={addFilm} sharedPayload={sharedPayload} onClearShared={() => setSharedPayload(null)} />}
         {page === "films" && (
           <FilmLibraryPage films={films} onDelete={deleteFilm}
-            onToggleWatched={toggleFilmWatched} onGo={setPage} />
+            onToggleWatched={toggleFilmWatched} onGo={setPage} onDeduplicate={deduplicateFilms} />
         )}
         {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onToggleSeason={toggleSeasonWatched} onMarkAllSeasons={markAllSeasonsWatched} onUpdate={updateItem} onGo={setPage} onDeduplicate={deduplicateLibrary} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
