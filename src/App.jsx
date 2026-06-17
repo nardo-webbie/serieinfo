@@ -517,7 +517,10 @@ const svcColor = (s = "") => {
 // Without season_count (legacy items, films) it falls back to the old
 // single `watched` boolean.
 function isFullyWatched(item) {
-  if (item.season_count && item.season_count > 0) {
+  // Only use per-season tracking for multi-season series (>1).
+  // Single-season series and legacy items use the simple `watched` boolean,
+  // matching the checkbox toggle logic.
+  if (item.season_count && item.season_count > 1) {
     return (item.watched_seasons || []).length >= item.season_count;
   }
   return !!item.watched;
