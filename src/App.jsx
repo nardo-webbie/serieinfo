@@ -778,7 +778,7 @@ function DetailModal({ item, onClose, onDelete }) {
             </div>
           )}
           <div className="rratings">
-            <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
+            <div className="rbox"><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
               {/* RT verwijderd */}
           </div>
           <div className="rlinks">
@@ -1293,7 +1293,7 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
                       <button className="lrow-del" title="Bewerken" style={{ color: "#6e6e73", fontSize: 13 }} onClick={e => { e.stopPropagation(); setSel(null); setEditing(item); }}>/</button>
                     </div>
                     <div className="lrow-btns">
-                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>[film] {item.tmdb_rating}</span>}</>}
+                      {!isEnriching && <>{item.tmdb_rating && <span className="lrow-r imdb" style={{ color:"#0066cc" }}>TMDB {item.tmdb_rating}</span>}</>}
                       {item.streaming_url && <a href={item.streaming_url} target="_blank" rel="noopener noreferrer" className="lrow-watch" onClick={e => e.stopPropagation()}>Bekijk</a>}
                     </div>
                   </div>
@@ -1753,7 +1753,7 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
             </div>
             {result.description && <p className="rdesc">{result.description}</p>}
             <div className="rratings">
-              <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
+              <div className="rbox"><div><div className="rl">TMDB</div><div className={"rv " + (result.tmdb_rating ? "tmdb" : "none")}>{result.tmdb_rating || "N/B"}</div></div></div>
             </div>
 
             {/* TMDB URL ophalen */}
