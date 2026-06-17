@@ -76,14 +76,15 @@ async function tmdbSearch(title) {
 
   const voteAvg = det.vote_average || show.vote_average || null;
   return {
-    title:       det.name || show.name,
-    year:        yearStr,
-    genres:      (det.genres || []).map(g => g.name),
-    description: show.overview || det.overview || null,
-    imdb_rating: null,
-    tmdb_rating: voteAvg ? voteAvg.toFixed(1) + "/10" : null,
-    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
-    poster_url:  show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
+    title:        det.name || show.name,
+    year:         yearStr,
+    genres:       (det.genres || []).map(g => g.name),
+    description:  show.overview || det.overview || null,
+    imdb_rating:  null,
+    tmdb_rating:  voteAvg ? voteAvg.toFixed(1) + "/10" : null,
+    imdb_url:     imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:   show.poster_path ? "https://image.tmdb.org/t/p/w342" + show.poster_path : null,
+    season_count: det.number_of_seasons || null,
   };
 }
 
@@ -494,6 +495,7 @@ async function tmdbFetchFull(tmdbId) {
     poster_url:        det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
     streaming_service: prov ? prov.name : null,
     streaming_url:     prov ? prov.url  : null,
+    season_count:      det.number_of_seasons || null,
   };
 }
 
@@ -509,6 +511,20 @@ const svcColor = (s = "") => {
   for (const [key, c] of Object.entries(SVC_COLORS)) if (k.includes(key)) return c;
   return "#888";
 };
+
+// --- Season-based watched helpers ----------------------------------------
+// A series with season_count tracks per-season progress in watched_seasons.
+// Without season_count (legacy items, films) it falls back to the old
+// single `watched` boolean.
+function isFullyWatched(item) {
+  if (item.season_count && item.season_count > 0) {
+    return (item.watched_seasons || []).length >= item.season_count;
+  }
+  return !!item.watched;
+}
+function watchedSeasonCount(item) {
+  return (item.watched_seasons || []).length;
+}
 
 function parseJsonArray(text) {
   const s = text.indexOf("["), e = text.lastIndexOf("]");
@@ -752,9 +768,15 @@ function DetailModal({ item, onClose, onDelete }) {
         <div className="modal-body">
           <div className="rmeta">
             {item.year && <span className="ytag">{item.year}</span>}
+            {item.season_count && <span className="ytag">{item.season_count} seizoen{item.season_count > 1 ? "en" : ""}</span>}
             {(item.genres || []).map(g => <span key={g} className="tag">{g}</span>)}
           </div>
           {item.description && <p className="rdesc">{item.description}</p>}
+          {item.season_count > 1 && (
+            <div style={{ fontSize:13, color:"#57534e" }}>
+              {watchedSeasonCount(item)} van {item.season_count} seizoenen bekeken
+            </div>
+          )}
           <div className="rratings">
             <div className="rbox"><span className="ricon">[film]</span><div><div className="rl">TMDB</div><div className={"rv " + (item.tmdb_rating ? "tmdb" : "none")}>{item.tmdb_rating || "N/B"}</div></div></div>
               {/* RT verwijderd */}
@@ -822,15 +844,16 @@ async function fetchFromTmdbId(tmdbId) {
 
   const voteAvg = det.vote_average || null;
   return {
-    title:       det.name || null,
-    year:        yearStr,
-    genres:      (det.genres || []).map(g => g.name),
-    description: det.overview || null,
-    imdb_rating: null,
-    tmdb_rating: voteAvg ? voteAvg.toFixed(1) + "/10" : null,
-    imdb_url:    imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
-    poster_url:  det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
-    source:      "tmdb",
+    title:        det.name || null,
+    year:         yearStr,
+    genres:       (det.genres || []).map(g => g.name),
+    description:  det.overview || null,
+    imdb_rating:  null,
+    tmdb_rating:  voteAvg ? voteAvg.toFixed(1) + "/10" : null,
+    imdb_url:     imdbId ? "https://www.imdb.com/title/" + imdbId + "/" : null,
+    poster_url:   det.poster_path ? "https://image.tmdb.org/t/p/w342" + det.poster_path : null,
+    season_count: det.number_of_seasons || null,
+    source:       "tmdb",
   };
 }
 
@@ -882,12 +905,13 @@ async function researchSeries(title, streamingService) {
 function EditModal({ item, onSave, onClose }) {
   const { guard, PinGate } = usePinGuard();
   const [form, setForm] = useState({
-    year:        item.year        || "",
-    genres:      (item.genres || []).join(", "),
-    description: item.description || "",
-    imdb_rating: item.imdb_rating || "",
-    tmdb_rating: item.tmdb_rating || "",
-    imdb_url:    item.imdb_url    || "",
+    year:         item.year         || "",
+    genres:       (item.genres || []).join(", "),
+    description:  item.description  || "",
+    imdb_rating:  item.imdb_rating  || "",
+    tmdb_rating:  item.tmdb_rating  || "",
+    imdb_url:     item.imdb_url     || "",
+    season_count: item.season_count || "",
   });
   const [searching,     setSearching]     = useState(false);
   const [searchErr,     setSearchErr]     = useState("");
@@ -912,11 +936,12 @@ function EditModal({ item, onSave, onClose }) {
       const data = await enrichOne(item.title, item.streaming_service);
       setForm(f => ({
         ...f,
-        year:        data.year        || f.year,
-        genres:      data.genres?.length ? data.genres.join(", ") : f.genres,
-        description: data.description || f.description,
-        tmdb_rating: data.tmdb_rating || f.tmdb_rating,
-        imdb_url:    data.imdb_url    || f.imdb_url,
+        year:         data.year         || f.year,
+        genres:       data.genres?.length ? data.genres.join(", ") : f.genres,
+        description:  data.description  || f.description,
+        tmdb_rating:  data.tmdb_rating  || f.tmdb_rating,
+        imdb_url:     data.imdb_url     || f.imdb_url,
+        season_count: data.season_count || f.season_count,
       }));
       const src = data.source === "tmdb" ? "v Gevonden via TMDB" : "v Gevonden via AI";
       setSearchOk(src);
@@ -968,13 +993,14 @@ function EditModal({ item, onSave, onClose }) {
     guard(() => {
       onSave({
         ...item,
-        year:        form.year        || null,
-        genres:      form.genres ? form.genres.split(",").map(g => g.trim()).filter(Boolean) : [],
-        description: form.description || null,
-        imdb_rating: form.imdb_rating || null,
-        imdb_url:    form.imdb_url    || null,
-        tmdb_rating: form.tmdb_rating || null,
-        enriched:    true,
+        year:         form.year         || null,
+        genres:       form.genres ? form.genres.split(",").map(g => g.trim()).filter(Boolean) : [],
+        description:  form.description  || null,
+        imdb_rating:  form.imdb_rating  || null,
+        imdb_url:     form.imdb_url     || null,
+        tmdb_rating:  form.tmdb_rating  || null,
+        season_count: form.season_count ? parseInt(form.season_count, 10) || null : null,
+        enriched:     true,
       });
       onClose();
     });
@@ -1069,9 +1095,10 @@ function EditModal({ item, onSave, onClose }) {
             {tmdbFetchOk  && <div style={{ fontSize:11, color:"#28a745", marginTop:5 }}>{tmdbFetchOk}</div>}
           </div>
 
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
             {inp("Jaar", "year")}
             {inp("Genres (komma-gescheiden)", "genres")}
+            {inp("Aantal seizoenen", "season_count")}
           </div>
           <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
             <label style={{ fontSize:11, letterSpacing:".15em", textTransform:"uppercase", color:"#6e6e73", fontWeight:600 }}>Omschrijving</label>
@@ -1144,7 +1171,7 @@ function EditModal({ item, onSave, onClose }) {
 
 
 // --- Library ---------------------------------------------------------------
-function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdate, onGo }) {
+function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggleSeason, onMarkAllSeasons, onUpdate, onGo }) {
   const { guard, PinGate } = usePinGuard();
   const [q, setQ] = useState("");
   const [svc, setSvc] = useState("");
@@ -1155,13 +1182,13 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
 
   useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
-  const watchedCount = library.filter(i => i.watched).length;
+  const watchedCount = library.filter(isFullyWatched).length;
   const svcs = [...new Set(library.map(i => i.streaming_service).filter(Boolean))].sort();
   let list = library.filter(item => {
     const lq = q.toLowerCase();
     return (!lq || item.title?.toLowerCase().includes(lq) || (item.genres || []).some(g => g.toLowerCase().includes(lq)) || item.description?.toLowerCase().includes(lq))
       && (!svc || item.streaming_service === svc)
-      && (!hideWatched || !item.watched);
+      && (!hideWatched || !isFullyWatched(item));
   });
   if (sort === "az") list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
   if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.tmdb_rating) || 0) - (parseFloat(a.tmdb_rating) || 0));
@@ -1212,16 +1239,22 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
             {list.map(item => {
               const isEnriching = enrichingIds.has(item.id);
               return (
-                <div key={item.id} className={"lrow " + (item.watched ? "watched" : "")} onClick={() => setSel(item)}>
+                <div key={item.id} className={"lrow " + (isFullyWatched(item) ? "watched" : "")} onClick={() => setSel(item)}>
                   <div className="lrow-accent" style={{ background: svcColor(item.streaming_service) }} />
                   {/* Checkbox bekeken */}
                   <input
                     type="checkbox"
                     className="watched-cb"
-                    checked={!!item.watched}
-                    title={item.watched ? "Markeer als onbekeken" : "Markeer als bekeken"}
+                    checked={isFullyWatched(item)}
+                    title={isFullyWatched(item) ? "Markeer als onbekeken" : "Markeer als volledig bekeken"}
                     onClick={e => e.stopPropagation()}
-                    onChange={e => { e.stopPropagation(); guard(() => onToggleWatched(item.id)); }}
+                    onChange={e => {
+                      e.stopPropagation();
+                      guard(() => {
+                        if (item.season_count && item.season_count > 1) onMarkAllSeasons(item.id);
+                        else onToggleWatched(item.id);
+                      });
+                    }}
                   />
                   <div className="lrow-main">
                     <div className="lrow-top">
@@ -1231,6 +1264,24 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onUpdat
                         {(item.genres || []).slice(0, 2).map(g => <span key={g} className="lrow-genre">{g}</span>)}
                       </div>
                     </div>
+                    {item.season_count > 1 && (
+                      <div className="season-pills" onClick={e => e.stopPropagation()}>
+                        {Array.from({ length: item.season_count }, (_, i) => i + 1).map(num => {
+                          const seasonWatched = (item.watched_seasons || []).includes(num);
+                          return (
+                            <button key={num}
+                              className={"season-pill" + (seasonWatched ? " watched" : "")}
+                              title={"Seizoen " + num + (seasonWatched ? " - bekeken" : " - nog niet bekeken")}
+                              onClick={() => guard(() => onToggleSeason(item.id, num))}>
+                              {num}
+                            </button>
+                          );
+                        })}
+                        <span className="season-pills-label">
+                          {watchedSeasonCount(item)}/{item.season_count}
+                        </span>
+                      </div>
+                    )}
                     {isEnriching ? <div className="lrow-enr">... AI verrijkt...</div>
                       : item.description ? <div className="lrow-desc">{item.description}</div>
                       : null}
@@ -1594,8 +1645,10 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
     if (alreadySaved) return;
     const item = {
       ...result,
-      imdb_url:    imdbUrlOverride || (result ? result.imdb_url : null) || null,
-      tmdb_rating: result ? result.tmdb_rating : null,
+      imdb_url:        imdbUrlOverride || (result ? result.imdb_url : null) || null,
+      tmdb_rating:      result ? result.tmdb_rating : null,
+      watched_seasons:  [],
+      watched:          false,
       id: "s" + Date.now(),
       savedAt: new Date().toISOString(),
     };
@@ -2076,14 +2129,15 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
         if (idx !== -1) {
           working[idx] = {
             ...working[idx],
-            title:       data.title       || working[idx].title,
-            year:        data.year        || working[idx].year,
-            genres:      data.genres?.length ? data.genres : working[idx].genres,
-            description: data.description || working[idx].description,
-            imdb_rating: data.imdb_rating || working[idx].imdb_rating,
-            tmdb_rating: data.tmdb_rating || working[idx].tmdb_rating || null,
-            imdb_url:    data.imdb_url    || working[idx].imdb_url,
-            poster_url:  data.poster_url  || working[idx].poster_url,
+            title:        data.title        || working[idx].title,
+            year:         data.year         || working[idx].year,
+            genres:       data.genres?.length ? data.genres : working[idx].genres,
+            description:  data.description  || working[idx].description,
+            imdb_rating:  data.imdb_rating  || working[idx].imdb_rating,
+            tmdb_rating:  data.tmdb_rating  || working[idx].tmdb_rating  || null,
+            imdb_url:     data.imdb_url     || working[idx].imdb_url,
+            poster_url:   data.poster_url   || working[idx].poster_url,
+            season_count: data.season_count || working[idx].season_count || null,
             enriched: true,
           };
         }
@@ -2253,10 +2307,18 @@ export default function App() {
     function mergeWatched(cloudItems, localItems) {
       const localById = {};
       localItems.forEach(i => { localById[i.id] = i; });
-      return cloudItems.map(item => ({
-        ...item,
-        watched: !!(item.watched || localById[item.id]?.watched),
-      }));
+      return cloudItems.map(item => {
+        const local = localById[item.id];
+        // Merge watched_seasons arrays (union) so progress from any device is kept
+        const cloudSeasons = item.watched_seasons || [];
+        const localSeasons = local?.watched_seasons || [];
+        const mergedSeasons = [...new Set([...cloudSeasons, ...localSeasons])].sort((a,b)=>a-b);
+        return {
+          ...item,
+          watched:         !!(item.watched || local?.watched),
+          watched_seasons: mergedSeasons,
+        };
+      });
     }
     if (Array.isArray(newLibrary) && newLibrary.length > 0) {
       setLibrary(prev => {
@@ -2294,6 +2356,26 @@ export default function App() {
   }
   function deleteItem(id) { const u = library.filter(i => i.id !== id); setLibrary(u); saveLib(u); }
   function toggleWatched(id) { const u = library.map(i => i.id === id ? { ...i, watched: !i.watched } : i); setLibrary(u); saveLib(u); }
+  function toggleSeasonWatched(id, seasonNum) {
+    const u = library.map(i => {
+      if (i.id !== id) return i;
+      const current = i.watched_seasons || [];
+      const has     = current.includes(seasonNum);
+      const next    = has ? current.filter(s => s !== seasonNum) : [...current, seasonNum].sort((a,b)=>a-b);
+      return { ...i, watched_seasons: next };
+    });
+    setLibrary(u); saveLib(u);
+  }
+  function markAllSeasonsWatched(id) {
+    const u = library.map(i => {
+      if (i.id !== id) return i;
+      const total = i.season_count || 1;
+      const allSeasons = Array.from({ length: total }, (_, idx) => idx + 1);
+      const fully = (i.watched_seasons || []).length >= total;
+      return { ...i, watched_seasons: fully ? [] : allSeasons };
+    });
+    setLibrary(u); saveLib(u);
+  }
 
   return (
     <>
@@ -2316,7 +2398,7 @@ export default function App() {
           <FilmLibraryPage films={films} onDelete={deleteFilm}
             onToggleWatched={toggleFilmWatched} onGo={setPage} />
         )}
-        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onUpdate={updateItem} onGo={setPage} />}
+        {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onToggleSeason={toggleSeasonWatched} onMarkAllSeasons={markAllSeasonsWatched} onUpdate={updateItem} onGo={setPage} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
       <SyncBar library={library} films={films} onImport={importFromCloud} />
