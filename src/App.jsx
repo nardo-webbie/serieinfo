@@ -2504,16 +2504,18 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    // Cloud wins for content, watched uses OR-merge:
-    // once watched on any device = stays watched everywhere
-    function mergeWatched(cloudItems, localItems) {
+    // TRUE union merge: cloud content wins on conflicts, watched is OR-merged,
+    // but items that exist ONLY locally (not yet pushed) are always kept.
+    // This guarantees a pull can never silently delete un-synced local additions.
+    function mergeArrays(cloudItems, localItems) {
       const localById = {};
       localItems.forEach(i => { localById[i.id] = i; });
-      return cloudItems.map(item => {
+      const cloudIds = new Set(cloudItems.map(i => i.id));
+
+      const fromCloud = cloudItems.map(item => {
         const local = localById[item.id];
-        // Merge watched_seasons arrays (union) so progress from any device is kept
-        const cloudSeasons = item.watched_seasons || [];
-        const localSeasons = local?.watched_seasons || [];
+        const cloudSeasons  = item.watched_seasons || [];
+        const localSeasons  = local?.watched_seasons || [];
         const mergedSeasons = [...new Set([...cloudSeasons, ...localSeasons])].sort((a,b)=>a-b);
         return {
           ...item,
@@ -2521,17 +2523,23 @@ export default function App() {
           watched_seasons: mergedSeasons,
         };
       });
+
+      // Local items not yet present in the cloud - keep them, next auto-sync will push them up
+      const localOnly = localItems.filter(i => !cloudIds.has(i.id));
+
+      return [...fromCloud, ...localOnly];
     }
-    if (Array.isArray(newLibrary) && newLibrary.length > 0) {
+
+    if (Array.isArray(newLibrary)) {
       setLibrary(prev => {
-        const merged = mergeWatched(newLibrary, prev);
+        const merged = mergeArrays(newLibrary, prev);
         saveLib(merged);
         return merged;
       });
     }
-    if (Array.isArray(newFilms) && newFilms.length > 0) {
+    if (Array.isArray(newFilms)) {
       setFilms(prev => {
-        const merged = mergeWatched(newFilms, prev);
+        const merged = mergeArrays(newFilms, prev);
         saveFilms(merged);
         return merged;
       });
