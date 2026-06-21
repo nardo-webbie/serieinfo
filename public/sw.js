@@ -1,7 +1,7 @@
 // Minimal service worker — maakt de app installeerbaar als PWA
 // en laat Share Target werken op Android/iOS
 
-const CACHE = "serieinfo-v1";
+const CACHE = "serieinfo-v2"; // bumped to force old cached clients to refresh
 const SHELL = ["/", "/index.html"];
 
 self.addEventListener("install", e => {
