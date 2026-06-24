@@ -1,5 +1,10 @@
-// Cloud sync via JSONBin v3
-// Env vars: JSONBIN_KEY (Master Key) + JSONBIN_BIN_ID
+// Cloud sync via JSONBin v3 — library en films in APARTE bins
+// zodat grote bibliotheken de 100KB limiet niet overschrijden.
+//
+// Env vars:
+//   JSONBIN_KEY          Master Key (begint met $2a$...)
+//   JSONBIN_BIN_ID       Bin voor de seriesbibliotheek
+//   JSONBIN_FILMS_BIN_ID Bin voor de filmsbibliotheek
 
 const BASE = "https://api.jsonbin.io/v3/b";
 
@@ -9,10 +14,11 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const masterKey = process.env.JSONBIN_KEY;
-  const binId     = process.env.JSONBIN_BIN_ID;
+  const masterKey  = process.env.JSONBIN_KEY;
+  const seriesBin  = process.env.JSONBIN_BIN_ID;
+  const filmsBin   = process.env.JSONBIN_FILMS_BIN_ID;
 
-  if (!masterKey) return res.status(500).json({ error: "JSONBIN_KEY niet ingesteld in Vercel" });
+  if (!masterKey) return res.status(500).json({ error: "JSONBIN_KEY niet ingesteld" });
 
   const jbHeaders = {
     "Content-Type":  "application/json",
@@ -20,18 +26,15 @@ export default async function handler(req, res) {
     "X-Bin-Private": "false",
   };
 
-  // Safe JSON parse - handles HTML error pages from JSONBin gracefully
   async function safeJson(r) {
     const text = await r.text();
-    try {
-      return { ok: r.ok, status: r.status, data: JSON.parse(text) };
-    } catch {
+    try { return { ok: r.ok, status: r.status, data: JSON.parse(text) }; }
+    catch {
       const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
       throw new Error("JSONBin gaf geen JSON (status " + r.status + "): " + preview);
     }
   }
 
-  // Robust body reader - handles pre-parsed, string, and raw stream cases
   async function readBody() {
     if (req.body !== null && req.body !== undefined) {
       if (typeof req.body === "object") return req.body;
@@ -46,52 +49,85 @@ export default async function handler(req, res) {
     return {};
   }
 
-  try {
+  async function getBin(binId) {
+    if (!binId) return null;
+    const { ok, data } = await safeJson(
+      await fetch(BASE + "/" + binId + "/latest", { headers: jbHeaders })
+    );
+    if (!ok) return null;
+    return data.record || null;
+  }
 
-    // GET - haal bibliotheek op
+  async function putBin(binId, payload) {
+    if (!binId) throw new Error("Bin ID ontbreekt");
+    const { ok, status, data } = await safeJson(
+      await fetch(BASE + "/" + binId, {
+        method: "PUT", headers: jbHeaders, body: JSON.stringify(payload),
+      })
+    );
+    if (!ok) throw new Error(data.message || "JSONBin PUT fout " + status);
+    return true;
+  }
+
+  try {
+    // GET — haal library en films op uit hun eigen bins
     if (req.method === "GET") {
-      if (!binId) return res.status(404).json({ error: "JSONBIN_BIN_ID niet ingesteld in Vercel" });
-      const { ok, status, data } = await safeJson(
-        await fetch(BASE + "/" + binId + "/latest", { headers: jbHeaders })
-      );
-      if (!ok) return res.status(status).json({ error: data.message || "JSONBin GET fout " + status });
-      return res.status(200).json(data.record || {});
+      if (!seriesBin && !filmsBin) {
+        return res.status(404).json({ error: "Geen bin IDs ingesteld" });
+      }
+      const [seriesData, filmsData] = await Promise.all([
+        getBin(seriesBin),
+        getBin(filmsBin),
+      ]);
+      const library = Array.isArray(seriesData?.library) ? seriesData.library
+                    : Array.isArray(seriesData)          ? seriesData
+                    : [];
+      const films   = Array.isArray(filmsData?.films)    ? filmsData.films
+                    : Array.isArray(filmsData)            ? filmsData
+                    : [];
+      return res.status(200).json({ library, films });
     }
 
-    // PUT - bibliotheek bijwerken
+    // PUT — sla library en films op in hun eigen bins
     if (req.method === "PUT") {
-      if (!binId) return res.status(400).json({ error: "JSONBIN_BIN_ID niet ingesteld in Vercel" });
       const body = await readBody();
-      if (!body || (!body.library && !body.films)) {
-        return res.status(400).json({ error: "Leeg of ongeldig request body" });
+      const errors = [];
+
+      if (Array.isArray(body.library) && seriesBin) {
+        try { await putBin(seriesBin, { library: body.library }); }
+        catch (e) { errors.push("series: " + e.message); }
+      } else if (!seriesBin) {
+        errors.push("JSONBIN_BIN_ID niet ingesteld");
       }
-      const { ok, status, data } = await safeJson(
-        await fetch(BASE + "/" + binId, {
-          method:  "PUT",
-          headers: jbHeaders,
-          body:    JSON.stringify(body),
-        })
-      );
-      if (!ok) return res.status(status).json({ error: data.message || "JSONBin PUT fout " + status });
+
+      if (Array.isArray(body.films) && filmsBin) {
+        try { await putBin(filmsBin, { films: body.films }); }
+        catch (e) { errors.push("films: " + e.message); }
+      } else if (!filmsBin) {
+        errors.push("JSONBIN_FILMS_BIN_ID niet ingesteld");
+      }
+
+      if (errors.length > 0) return res.status(500).json({ error: errors.join(" | ") });
       return res.status(200).json({ ok: true });
     }
 
-    // POST - nieuwe bin aanmaken (eenmalig)
+    // POST — maak een nieuwe bin aan (voor initial setup)
     if (req.method === "POST") {
       const body = await readBody();
-      const { ok, status, data } = await safeJson(
+      const name  = body.name || "serieinfo";
+      const data  = body.data || {};
+      const { ok, status, data: d } = await safeJson(
         await fetch(BASE, {
-          method:  "POST",
-          headers: { ...jbHeaders, "X-Bin-Name": "serieinfo" },
-          body:    JSON.stringify(body),
+          method: "POST",
+          headers: { ...jbHeaders, "X-Bin-Name": name },
+          body:    JSON.stringify(data),
         })
       );
-      if (!ok) return res.status(status).json({ error: data.message || "JSONBin POST fout " + status });
-      return res.status(200).json({ id: data.metadata?.id, record: data.record });
+      if (!ok) return res.status(status).json({ error: d.message || "Aanmaken mislukt" });
+      return res.status(200).json({ id: d.metadata?.id });
     }
 
     return res.status(405).json({ error: "Method not allowed" });
-
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

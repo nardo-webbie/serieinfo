@@ -190,12 +190,14 @@ function SyncBar({ library, films, onImport }) {
     if (lib.length === 0 && fms.length === 0) return;
     setStatus("syncing"); setMsg("");
     try {
-      await cloudPut({ library: lib, films: fms });
+      const payload = { library: lib, films: fms };
+      const sizeKB = Math.round(JSON.stringify(payload).length / 1024);
+      await cloudPut(payload);
       setStatus("ok"); setLastSync(new Date());
-      setMsg(lib.length + " series, " + fms.length + " films opgeslagen in cloud");
+      setMsg(lib.length + " series, " + fms.length + " films opgeslagen (" + sizeKB + " KB)");
     } catch (e) {
       setStatus("error");
-      setMsg(e.message.slice(0, 80));
+      setMsg(e.message.slice(0, 120));
     }
   }
 
