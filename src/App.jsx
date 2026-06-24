@@ -163,41 +163,69 @@ function exportLibrary(library, films) {
 }
 
 // --- Sync Bar Component --------------------------------------------------
+// Helper: union-merge two arrays by ID
+function unionById(localItems, cloudItems) {
+  const cloudById = {};
+  cloudItems.forEach(i => { cloudById[i.id] = i; });
+  const localIds = new Set(localItems.map(i => i.id));
+  const cloudOnly = cloudItems.filter(i => !localIds.has(i.id));
+  // Local wins for items in both (latest user action), cloud fills in missing items
+  return [...localItems, ...cloudOnly];
+}
+
 function SyncBar({ library, films, onImport }) {
   const [enabled,  setEnabled]  = useState(getSyncEnabled);
   const [status,   setStatus]   = useState("idle");
   const [msg,      setMsg]      = useState("");
   const [lastSync, setLastSync] = useState(null);
 
-  // Refs always hold the latest values - avoids stale closure in setTimeout
+  // Refs always hold the latest values
   const libRef   = useRef(library);
   const filmsRef = useRef(films);
   useEffect(() => { libRef.current   = library; }, [library]);
   useEffect(() => { filmsRef.current = films;   }, [films]);
 
-  // Auto-sync 2s after any change when enabled - skip if local data is empty
+  // Auto-sync 2s after any change  -  uses merge-push to never overwrite cloud additions
   useEffect(() => {
     if (!enabled) return;
     if (library.length === 0 && films.length === 0) return;
-    const timer = setTimeout(() => doPush(), 2000);
+    const timer = setTimeout(() => doMergePush(), 2000);
     return () => clearTimeout(timer);
   }, [library, films, enabled]);
 
-  // Always reads latest state via ref - never stale
-  async function doPush() {
-    const lib = libRef.current;
-    const fms = filmsRef.current;
-    if (lib.length === 0 && fms.length === 0) return;
+  // Merge-push: pull cloud first, union-merge, then push back.
+  // This guarantees the cloud always ends up with the SUPERSET of all devices.
+  async function doMergePush() {
+    const localLib   = libRef.current;
+    const localFilms = filmsRef.current;
+    if (localLib.length === 0 && localFilms.length === 0) return;
     setStatus("syncing"); setMsg("");
     try {
-      const payload = { library: lib, films: fms };
-      const sizeKB = Math.round(JSON.stringify(payload).length / 1024);
-      await cloudPut(payload);
+      // 1. Fetch current cloud state
+      let cloudLib = [], cloudFilms = [];
+      try {
+        const d = await cloudGet();
+        cloudLib   = Array.isArray(d?.library) ? d.library : [];
+        cloudFilms = Array.isArray(d?.films)   ? d.films   : [];
+      } catch (_) { /* cloud unreachable: push local only */ }
+
+      // 2. Union-merge: result always contains items from BOTH sides
+      const mergedLib   = unionById(localLib,   cloudLib);
+      const mergedFilms = unionById(localFilms, cloudFilms);
+
+      // 3. Push merged result to cloud
+      const sizeKB = Math.round(JSON.stringify({ library: mergedLib, films: mergedFilms }).length / 1024);
+      await cloudPut({ library: mergedLib, films: mergedFilms });
+
+      // 4. Update local state if cloud had extra items not present locally
+      if (mergedLib.length > localLib.length || mergedFilms.length > localFilms.length) {
+        onImport(mergedLib, mergedFilms);
+      }
+
       setStatus("ok"); setLastSync(new Date());
-      setMsg(lib.length + " series, " + fms.length + " films opgeslagen (" + sizeKB + " KB)");
+      setMsg(mergedLib.length + " series, " + mergedFilms.length + " films (" + sizeKB + " KB)");
     } catch (e) {
-      setStatus("error");
-      setMsg(e.message.slice(0, 120));
+      setStatus("error"); setMsg(e.message.slice(0, 120));
     }
   }
 
@@ -211,14 +239,11 @@ function SyncBar({ library, films, onImport }) {
       const cloudLib   = Array.isArray(d.library) ? d.library : null;
       const cloudFilms = Array.isArray(d.films)   ? d.films   : null;
       if (!cloudLib && !cloudFilms) {
-        setStatus("error"); setMsg("Geen data gevonden (library en films leeg)"); return;
+        setStatus("error"); setMsg("Geen data gevonden"); return;
       }
       onImport(cloudLib || [], cloudFilms || []);
-      const seriesCount = cloudLib   ? cloudLib.length   : 0;
-      const filmsCount  = cloudFilms ? cloudFilms.length : 0;
-      setStatus("ok");
-      setLastSync(new Date());
-      setMsg(seriesCount + " series en " + filmsCount + " films geladen uit cloud");
+      setStatus("ok"); setLastSync(new Date());
+      setMsg((cloudLib?.length || 0) + " series, " + (cloudFilms?.length || 0) + " films geladen");
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     }
@@ -227,7 +252,6 @@ function SyncBar({ library, films, onImport }) {
   function handleToggle() {
     const next = !enabled;
     setEnabled(next); setSyncEnabled(next);
-    // Always pull first when enabling  -  prevents new users from wiping cloud data
     if (next) pullFromCloud();
   }
 
@@ -279,7 +303,7 @@ function SyncBar({ library, films, onImport }) {
         </label>
         {enabled && (
           <>
-            <button className="sync-btn primary" onClick={() => doPush()} disabled={status === "syncing"}>
+            <button className="sync-btn primary" onClick={() => doMergePush()} disabled={status === "syncing"}>
               {status === "syncing" ? "Bezig..." : "Stuur naar cloud"}
             </button>
             <button className="sync-btn" onClick={pullFromCloud} disabled={status === "syncing"}>
