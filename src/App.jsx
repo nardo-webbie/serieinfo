@@ -203,7 +203,7 @@ function unionById(localItems, cloudItems) {
   return [...localItems, ...cloudOnly];
 }
 
-function SyncBar({ library, films, onImport }) {
+function SyncBar({ library, films, onImport, onReplace }) {
   const [enabled,  setEnabled]  = useState(getSyncEnabled);
   const [status,   setStatus]   = useState("idle");
   const [msg,      setMsg]      = useState("");
@@ -341,6 +341,14 @@ function SyncBar({ library, films, onImport }) {
           onImport(null, fms);
           alert(fms.length + " films geladen.");
         }} />
+        {enabled && (
+          <ImportBtn label="Vervang alles + sync" onLoad={data => {
+            const lib = Array.isArray(data.library) ? data.library : [];
+            const fms = Array.isArray(data.films)   ? data.films   : [];
+            if (!window.confirm("Library en films volledig vervangen en direct naar cloud sturen?")) return;
+            onReplace(lib, fms);
+          }} />
+        )}
         {enabled && (
           <>
             <button className="sync-btn primary" onClick={() => doMergePush()} disabled={status === "syncing"}>
@@ -2569,6 +2577,16 @@ export default function App() {
   function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
+  function replaceAll(newLibrary, newFilms) {
+    // Hard replace: no merge, wipe local + cloud with exactly this data
+    setLibrary(newLibrary); saveLib(newLibrary);
+    setFilms(newFilms);     saveFilms(newFilms);
+    // Push straight to cloud (bypass merge-push timer)
+    cloudPut({ library: newLibrary, films: newFilms })
+      .then(() => alert(newLibrary.length + " series, " + newFilms.length + " films opgeslagen in cloud."))
+      .catch(e => alert("Cloud fout: " + e.message));
+  }
+
   function importFromCloud(newLibrary, newFilms) {
     // null means "don't touch this collection" (e.g. series-only import)
     // TRUE union merge: cloud wins on conflicts, local-only items kept.
@@ -2703,7 +2721,7 @@ export default function App() {
         {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onToggleSeason={toggleSeasonWatched} onMarkAllSeasons={markAllSeasonsWatched} onUpdate={updateItem} onGo={setPage} onDeduplicate={deduplicateLibrary} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
-      <SyncBar library={library} films={films} onImport={importFromCloud} />
+      <SyncBar library={library} films={films} onImport={importFromCloud} onReplace={replaceAll} />
     </>
   );
 }
