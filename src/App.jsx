@@ -153,16 +153,46 @@ async function cloudCreate(data) {
   }));
 }
 
-function exportLibrary(library, films) {
-  const data = { library, films, exportedAt: new Date().toISOString(), version: 1 };
+function downloadJson(data, filename) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement("a");
-  a.href = url; a.download = "serieinfo-backup.json"; a.click();
+  a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
+}
+function exportSeries(library) {
+  downloadJson({ library, exportedAt: new Date().toISOString() }, "serieinfo-series.json");
+}
+function exportFilms(films) {
+  downloadJson({ films, exportedAt: new Date().toISOString() }, "serieinfo-films.json");
+}
+// Legacy combined export (still available as fallback)
+function exportLibrary(library, films) {
+  downloadJson({ library, films, exportedAt: new Date().toISOString(), version: 1 }, "serieinfo-backup.json");
 }
 
 // --- Sync Bar Component --------------------------------------------------
+// Reusable file-import button
+function ImportBtn({ label, onLoad }) {
+  return (
+    <label className="sync-btn" style={{ cursor:"pointer" }} title={label}>
+      {label}
+      <input type="file" accept=".json,application/json" style={{ display:"none" }}
+        onChange={e => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = evt => {
+            try { onLoad(JSON.parse(evt.target.result)); }
+            catch { alert("Fout: ongeldig JSON-bestand."); }
+            e.target.value = "";
+          };
+          reader.readAsText(file);
+        }} />
+    </label>
+  );
+}
+
 // Helper: union-merge two arrays by ID
 function unionById(localItems, cloudItems) {
   const cloudById = {};
@@ -293,42 +323,30 @@ function SyncBar({ library, films, onImport }) {
         </div>
       </div>
       <div className="sync-actions">
-        <button className="sync-btn" onClick={() => exportLibrary(library, films)}>
-          Exporteer JSON
+        <button className="sync-btn" onClick={() => exportSeries(library)} title="Exporteer alleen series">
+          Exporteer series
         </button>
-        <label className="sync-btn" style={{ cursor:"pointer" }} title="Importeer een eerder geexporteerd JSON-bestand">
-          Importeer JSON
-          <input type="file" accept=".json,application/json" style={{ display:"none" }}
-            onChange={e => {
-              const file = e.target.files[0];
-              if (!file) return;
-              const reader = new FileReader();
-              reader.onload = evt => {
-                try {
-                  const data = JSON.parse(evt.target.result);
-                  if (!data.library && !data.films) {
-                    alert("Ongeldig bestand: geen library of films gevonden.");
-                    return;
-                  }
-                  onImport(Array.isArray(data.library) ? data.library : [],
-                           Array.isArray(data.films)   ? data.films   : []);
-                  alert("Import geslaagd: " +
-                    (data.library ? data.library.length : 0) + " series, " +
-                    (data.films   ? data.films.length   : 0) + " films geladen.");
-                } catch {
-                  alert("Fout: kon het bestand niet lezen. Is het een geldig SerieInfo JSON-bestand?");
-                }
-                e.target.value = "";
-              };
-              reader.readAsText(file);
-            }} />
-        </label>
+        <button className="sync-btn" onClick={() => exportFilms(films)} title="Exporteer alleen films">
+          Exporteer films
+        </button>
+        <ImportBtn label="Importeer series" onLoad={data => {
+          const lib = Array.isArray(data.library) ? data.library : Array.isArray(data) ? data : null;
+          if (!lib) { alert("Geen series gevonden in dit bestand."); return; }
+          onImport(lib, null);
+          alert(lib.length + " series geladen.");
+        }} />
+        <ImportBtn label="Importeer films" onLoad={data => {
+          const fms = Array.isArray(data.films) ? data.films : Array.isArray(data) ? data : null;
+          if (!fms) { alert("Geen films gevonden in dit bestand."); return; }
+          onImport(null, fms);
+          alert(fms.length + " films geladen.");
+        }} />
         {enabled && (
           <>
             <button className="sync-btn primary" onClick={() => doMergePush()} disabled={status === "syncing"}>
               {status === "syncing" ? "Bezig..." : "Stuur naar cloud"}
             </button>
-            <button className="sync-btn" onClick={pullFromCloud} disabled={status === "syncing"}>
+            <button className="sync-btn" onClick={() => pullFromCloud()} disabled={status === "syncing"}>
               Haal op van cloud
             </button>
           </>
@@ -2552,9 +2570,8 @@ export default function App() {
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
   function importFromCloud(newLibrary, newFilms) {
-    // TRUE union merge: cloud content wins on conflicts, watched is OR-merged,
-    // but items that exist ONLY locally (not yet pushed) are always kept.
-    // This guarantees a pull can never silently delete un-synced local additions.
+    // null means "don't touch this collection" (e.g. series-only import)
+    // TRUE union merge: cloud wins on conflicts, local-only items kept.
     function mergeArrays(cloudItems, localItems) {
       const localById = {};
       localItems.forEach(i => { localById[i.id] = i; });
@@ -2578,14 +2595,14 @@ export default function App() {
       return [...fromCloud, ...localOnly];
     }
 
-    if (Array.isArray(newLibrary)) {
+    if (newLibrary !== null && Array.isArray(newLibrary)) {
       setLibrary(prev => {
         const merged = mergeArrays(newLibrary, prev);
         saveLib(merged);
         return merged;
       });
     }
-    if (Array.isArray(newFilms)) {
+    if (newFilms !== null && Array.isArray(newFilms)) {
       setFilms(prev => {
         const merged = mergeArrays(newFilms, prev);
         saveFilms(merged);

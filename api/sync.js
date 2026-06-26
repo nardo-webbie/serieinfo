@@ -1,8 +1,12 @@
-// Cloud sync via GitHub Gist
-// Env vars: GITHUB_TOKEN + GITHUB_GIST_ID
+// Cloud sync via GitHub Gist - series en films in aparte Gists
+// Env vars:
+//   GITHUB_TOKEN          Personal Access Token (gist scope)
+//   GITHUB_GIST_ID        Gist ID voor series bibliotheek
+//   GITHUB_FILMS_GIST_ID  Gist ID voor films bibliotheek
 
-const GIST_API = "https://api.github.com/gists";
-const FILE     = "serieinfo.json";
+const GIST_API    = "https://api.github.com/gists";
+const SERIES_FILE = "serieinfo-series.json";
+const FILMS_FILE  = "serieinfo-films.json";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -10,13 +14,14 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const token  = process.env.GITHUB_TOKEN;
-  const gistId = process.env.GITHUB_GIST_ID;
+  const token       = process.env.GITHUB_TOKEN;
+  const seriesGist  = process.env.GITHUB_GIST_ID;
+  const filmsGist   = process.env.GITHUB_FILMS_GIST_ID;
 
-  const headers = {
-    "Accept":       "application/vnd.github+json",
-    "Content-Type": "application/json",
-    "User-Agent":   "SerieInfo-App",
+  const ghHeaders = {
+    "Accept":        "application/vnd.github+json",
+    "Content-Type":  "application/json",
+    "User-Agent":    "SerieInfo-App",
     ...(token ? { "Authorization": "Bearer " + token } : {}),
   };
 
@@ -43,56 +48,84 @@ export default async function handler(req, res) {
     return {};
   }
 
-  try {
+  async function getGist(gistId, filename) {
+    if (!gistId) return null;
+    const { ok, data } = await safeJson(await fetch(GIST_API + "/" + gistId, { headers: ghHeaders }));
+    if (!ok) return null;
+    const content = data.files?.[filename]?.content;
+    if (!content) return null;
+    try { return JSON.parse(content); } catch { return null; }
+  }
 
-    // GET
+  async function patchGist(gistId, filename, payload) {
+    if (!gistId) throw new Error("Gist ID ontbreekt");
+    if (!token)  throw new Error("GITHUB_TOKEN niet ingesteld");
+    const { ok, status, data } = await safeJson(
+      await fetch(GIST_API + "/" + gistId, {
+        method:  "PATCH",
+        headers: ghHeaders,
+        body:    JSON.stringify({ files: { [filename]: { content: JSON.stringify(payload) } } }),
+      })
+    );
+    if (!ok) throw new Error(data.message || "GitHub PATCH fout " + status);
+    return true;
+  }
+
+  async function createGist(filename, description, payload) {
+    if (!token) throw new Error("GITHUB_TOKEN vereist");
+    const { ok, status, data } = await safeJson(
+      await fetch(GIST_API, {
+        method:  "POST",
+        headers: ghHeaders,
+        body:    JSON.stringify({
+          description,
+          public: false,
+          files:  { [filename]: { content: JSON.stringify(payload) } },
+        }),
+      })
+    );
+    if (!ok) throw new Error(data.message || "GitHub POST fout " + status);
+    return { id: data.id, url: data.html_url };
+  }
+
+  try {
+    // GET — haal series en films op uit hun eigen Gist
     if (req.method === "GET") {
-      if (!gistId) return res.status(404).json({ error: "GITHUB_GIST_ID niet ingesteld" });
-      const { ok, status, data } = await safeJson(
-        await fetch(GIST_API + "/" + gistId, { headers })
-      );
-      if (!ok) return res.status(status).json({ error: data.message || "GitHub GET fout " + status });
-      const content = data.files?.[FILE]?.content;
-      if (!content) return res.status(404).json({ error: FILE + " niet gevonden in gist" });
-      return res.status(200).json(JSON.parse(content));
+      const [seriesData, filmsData] = await Promise.all([
+        getGist(seriesGist, SERIES_FILE),
+        getGist(filmsGist,  FILMS_FILE),
+      ]);
+      const library = Array.isArray(seriesData?.library) ? seriesData.library
+                    : Array.isArray(seriesData)          ? seriesData : [];
+      const films   = Array.isArray(filmsData?.films)    ? filmsData.films
+                    : Array.isArray(filmsData)            ? filmsData : [];
+      return res.status(200).json({ library, films });
     }
 
-    // PUT
+    // PUT — sla series en films op in hun eigen Gist (parallel)
     if (req.method === "PUT") {
-      if (!gistId)  return res.status(400).json({ error: "GITHUB_GIST_ID niet ingesteld" });
-      if (!token)   return res.status(401).json({ error: "GITHUB_TOKEN niet ingesteld" });
-      const body = await readBody();
-      if (!body || (!body.library && !body.films)) {
-        return res.status(400).json({ error: "Leeg of ongeldig request body" });
-      }
-      const { ok, status, data } = await safeJson(
-        await fetch(GIST_API + "/" + gistId, {
-          method:  "PATCH",
-          headers,
-          body:    JSON.stringify({ files: { [FILE]: { content: JSON.stringify(body) } } }),
-        })
-      );
-      if (!ok) return res.status(status).json({ error: data.message || "GitHub PATCH fout " + status });
+      const body   = await readBody();
+      const errors = [];
+      await Promise.all([
+        Array.isArray(body.library) && seriesGist
+          ? patchGist(seriesGist, SERIES_FILE, { library: body.library }).catch(e => errors.push("series: " + e.message))
+          : Promise.resolve(),
+        Array.isArray(body.films) && filmsGist
+          ? patchGist(filmsGist, FILMS_FILE, { films: body.films }).catch(e => errors.push("films: " + e.message))
+          : Promise.resolve(),
+      ]);
+      if (errors.length) return res.status(500).json({ error: errors.join(" | ") });
       return res.status(200).json({ ok: true });
     }
 
-    // POST — gist aanmaken
+    // POST — maak een nieuwe Gist aan (eenmalige setup)
     if (req.method === "POST") {
-      if (!token) return res.status(401).json({ error: "GITHUB_TOKEN vereist" });
       const body = await readBody();
-      const { ok, status, data } = await safeJson(
-        await fetch(GIST_API, {
-          method:  "POST",
-          headers,
-          body:    JSON.stringify({
-            description: "SerieInfo bibliotheek sync",
-            public:      false,
-            files:       { [FILE]: { content: JSON.stringify(body) } },
-          }),
-        })
-      );
-      if (!ok) return res.status(status).json({ error: data.message || "GitHub POST fout " + status });
-      return res.status(200).json({ id: data.id, url: data.html_url });
+      const type = body.type || "series"; // "series" or "films"
+      const result = type === "films"
+        ? await createGist(FILMS_FILE,  "SerieInfo films sync",   { films:   body.films   || [] })
+        : await createGist(SERIES_FILE, "SerieInfo series sync",  { library: body.library || [] });
+      return res.status(200).json(result);
     }
 
     return res.status(405).json({ error: "Method not allowed" });
