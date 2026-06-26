@@ -1,12 +1,8 @@
-// Cloud sync via JSONBin v3 — library en films in APARTE bins
-// zodat grote bibliotheken de 100KB limiet niet overschrijden.
-//
-// Env vars:
-//   JSONBIN_KEY          Master Key (begint met $2a$...)
-//   JSONBIN_BIN_ID       Bin voor de seriesbibliotheek
-//   JSONBIN_FILMS_BIN_ID Bin voor de filmsbibliotheek
+// Cloud sync via GitHub Gist
+// Env vars: GITHUB_TOKEN + GITHUB_GIST_ID
 
-const BASE = "https://api.jsonbin.io/v3/b";
+const GIST_API = "https://api.github.com/gists";
+const FILE     = "serieinfo.json";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -14,16 +10,14 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const masterKey  = process.env.JSONBIN_KEY;
-  const seriesBin  = process.env.JSONBIN_BIN_ID;
-  const filmsBin   = process.env.JSONBIN_FILMS_BIN_ID;
+  const token  = process.env.GITHUB_TOKEN;
+  const gistId = process.env.GITHUB_GIST_ID;
 
-  if (!masterKey) return res.status(500).json({ error: "JSONBIN_KEY niet ingesteld" });
-
-  const jbHeaders = {
-    "Content-Type":  "application/json",
-    "X-Master-Key":  masterKey,
-    "X-Bin-Private": "false",
+  const headers = {
+    "Accept":       "application/vnd.github+json",
+    "Content-Type": "application/json",
+    "User-Agent":   "SerieInfo-App",
+    ...(token ? { "Authorization": "Bearer " + token } : {}),
   };
 
   async function safeJson(r) {
@@ -31,7 +25,7 @@ export default async function handler(req, res) {
     try { return { ok: r.ok, status: r.status, data: JSON.parse(text) }; }
     catch {
       const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-      throw new Error("JSONBin gaf geen JSON (status " + r.status + "): " + preview);
+      throw new Error("GitHub gaf geen JSON (status " + r.status + "): " + preview);
     }
   }
 
@@ -49,82 +43,56 @@ export default async function handler(req, res) {
     return {};
   }
 
-  async function getBin(binId) {
-    if (!binId) return null;
-    const { ok, data } = await safeJson(
-      await fetch(BASE + "/" + binId + "/latest", { headers: jbHeaders })
-    );
-    if (!ok) return null;
-    return data.record || null;
-  }
-
-  async function putBin(binId, payload) {
-    if (!binId) throw new Error("Bin ID ontbreekt");
-    const { ok, status, data } = await safeJson(
-      await fetch(BASE + "/" + binId, {
-        method: "PUT", headers: jbHeaders, body: JSON.stringify(payload),
-      })
-    );
-    if (!ok) throw new Error(data.message || "JSONBin PUT fout " + status);
-    return true;
-  }
-
   try {
-    // GET — haal library en films op uit hun eigen bins
+
+    // GET
     if (req.method === "GET") {
-      if (!seriesBin && !filmsBin) {
-        return res.status(404).json({ error: "Geen bin IDs ingesteld" });
-      }
-      const [seriesData, filmsData] = await Promise.all([
-        getBin(seriesBin),
-        getBin(filmsBin),
-      ]);
-      const library = Array.isArray(seriesData?.library) ? seriesData.library
-                    : Array.isArray(seriesData)          ? seriesData
-                    : [];
-      const films   = Array.isArray(filmsData?.films)    ? filmsData.films
-                    : Array.isArray(filmsData)            ? filmsData
-                    : [];
-      return res.status(200).json({ library, films });
+      if (!gistId) return res.status(404).json({ error: "GITHUB_GIST_ID niet ingesteld" });
+      const { ok, status, data } = await safeJson(
+        await fetch(GIST_API + "/" + gistId, { headers })
+      );
+      if (!ok) return res.status(status).json({ error: data.message || "GitHub GET fout " + status });
+      const content = data.files?.[FILE]?.content;
+      if (!content) return res.status(404).json({ error: FILE + " niet gevonden in gist" });
+      return res.status(200).json(JSON.parse(content));
     }
 
-    // PUT — sla library en films op in hun eigen bins
+    // PUT
     if (req.method === "PUT") {
+      if (!gistId)  return res.status(400).json({ error: "GITHUB_GIST_ID niet ingesteld" });
+      if (!token)   return res.status(401).json({ error: "GITHUB_TOKEN niet ingesteld" });
       const body = await readBody();
-      const errors = [];
-
-      if (Array.isArray(body.library) && seriesBin) {
-        try { await putBin(seriesBin, { library: body.library }); }
-        catch (e) { errors.push("series: " + e.message); }
-      } else if (!seriesBin) {
-        errors.push("JSONBIN_BIN_ID niet ingesteld");
+      if (!body || (!body.library && !body.films)) {
+        return res.status(400).json({ error: "Leeg of ongeldig request body" });
       }
-
-      if (Array.isArray(body.films) && filmsBin) {
-        try { await putBin(filmsBin, { films: body.films }); }
-        catch (e) { errors.push("films: " + e.message); }
-      } else if (!filmsBin) {
-        errors.push("JSONBIN_FILMS_BIN_ID niet ingesteld");
-      }
-
-      if (errors.length > 0) return res.status(500).json({ error: errors.join(" | ") });
+      const { ok, status, data } = await safeJson(
+        await fetch(GIST_API + "/" + gistId, {
+          method:  "PATCH",
+          headers,
+          body:    JSON.stringify({ files: { [FILE]: { content: JSON.stringify(body) } } }),
+        })
+      );
+      if (!ok) return res.status(status).json({ error: data.message || "GitHub PATCH fout " + status });
       return res.status(200).json({ ok: true });
     }
 
-    // POST — maak een nieuwe bin aan (voor initial setup)
+    // POST — gist aanmaken
     if (req.method === "POST") {
+      if (!token) return res.status(401).json({ error: "GITHUB_TOKEN vereist" });
       const body = await readBody();
-      const name  = body.name || "serieinfo";
-      const data  = body.data || {};
-      const { ok, status, data: d } = await safeJson(
-        await fetch(BASE, {
-          method: "POST",
-          headers: { ...jbHeaders, "X-Bin-Name": name },
-          body:    JSON.stringify(data),
+      const { ok, status, data } = await safeJson(
+        await fetch(GIST_API, {
+          method:  "POST",
+          headers,
+          body:    JSON.stringify({
+            description: "SerieInfo bibliotheek sync",
+            public:      false,
+            files:       { [FILE]: { content: JSON.stringify(body) } },
+          }),
         })
       );
-      if (!ok) return res.status(status).json({ error: d.message || "Aanmaken mislukt" });
-      return res.status(200).json({ id: d.metadata?.id });
+      if (!ok) return res.status(status).json({ error: data.message || "GitHub POST fout " + status });
+      return res.status(200).json({ id: data.id, url: data.html_url });
     }
 
     return res.status(405).json({ error: "Method not allowed" });
