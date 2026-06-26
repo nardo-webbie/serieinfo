@@ -180,17 +180,26 @@ function SyncBar({ library, films, onImport }) {
   const [lastSync, setLastSync] = useState(null);
 
   // Refs always hold the latest values
-  const libRef   = useRef(library);
-  const filmsRef = useRef(films);
+  const libRef       = useRef(library);
+  const filmsRef     = useRef(films);
+  const readyToPush  = useRef(false); // true only after initial pull  -  prevents overwrite on refresh
+  const pushTimer    = useRef(null);
+
   useEffect(() => { libRef.current   = library; }, [library]);
   useEffect(() => { filmsRef.current = films;   }, [films]);
 
-  // Auto-sync 2s after any change  -  uses merge-push to never overwrite cloud additions
+  // On mount: if sync enabled, pull from cloud first so refresh never uses stale localStorage
   useEffect(() => {
-    if (!enabled) return;
+    if (enabled) pullFromCloud(true);
+  }, []); // only on mount
+
+  // Auto-sync: only fires after user actions, not on initial page load
+  useEffect(() => {
+    if (!enabled || !readyToPush.current) return;
     if (library.length === 0 && films.length === 0) return;
-    const timer = setTimeout(() => doMergePush(), 2000);
-    return () => clearTimeout(timer);
+    clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(() => doMergePush(), 2000);
+    return () => clearTimeout(pushTimer.current);
   }, [library, films, enabled]);
 
   // Merge-push: pull cloud first, union-merge, then push back.
@@ -229,30 +238,43 @@ function SyncBar({ library, films, onImport }) {
     }
   }
 
-  async function pullFromCloud() {
-    setStatus("syncing"); setMsg("");
+  async function pullFromCloud(isInitialLoad = false) {
+    setStatus("syncing");
+    setMsg(isInitialLoad ? "Bibliotheek ophalen uit cloud..." : "");
     try {
       const d = await cloudGet();
       if (!d || typeof d !== "object") {
-        setStatus("error"); setMsg("Ongeldig antwoord van cloud"); return;
+        setStatus("error"); setMsg("Ongeldig antwoord van cloud");
+        readyToPush.current = true; // allow push even if pull failed
+        return;
       }
       const cloudLib   = Array.isArray(d.library) ? d.library : null;
       const cloudFilms = Array.isArray(d.films)   ? d.films   : null;
       if (!cloudLib && !cloudFilms) {
-        setStatus("error"); setMsg("Geen data gevonden"); return;
+        setStatus("error"); setMsg("Geen data gevonden in cloud");
+        readyToPush.current = true;
+        return;
       }
       onImport(cloudLib || [], cloudFilms || []);
       setStatus("ok"); setLastSync(new Date());
       setMsg((cloudLib?.length || 0) + " series, " + (cloudFilms?.length || 0) + " films geladen");
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
+    } finally {
+      // Gate opens after pull: auto-sync may now push user actions
+      readyToPush.current = true;
     }
   }
 
   function handleToggle() {
     const next = !enabled;
     setEnabled(next); setSyncEnabled(next);
-    if (next) pullFromCloud();
+    if (next) {
+      readyToPush.current = false; // reset gate: pull first, then allow auto-push
+      pullFromCloud(true);
+    } else {
+      readyToPush.current = false;
+    }
   }
 
   const dot = !enabled ? "off" : { syncing:"syncing", ok:"ok", error:"error" }[status] || "off";
