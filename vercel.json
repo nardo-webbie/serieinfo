@@ -1,5 +1,18 @@
 {
-  "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ]
+  "functions": {
+    "api/sync.js": {
+      "maxDuration": 15,
+      "regions": ["fra1", "ams1", "cdg1"]
+    },
+    "api/weekly-update.js": {
+      "maxDuration": 60,
+      "regions": ["fra1"]
+    },
+    "api/claude.js": {
+      "maxDuration": 30
+    },
+    "api/test.js": {
+      "maxDuration": 5
+    }
+  }
 }

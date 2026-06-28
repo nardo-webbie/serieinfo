@@ -1,8 +1,8 @@
 // Cloud sync via GitHub Gist - series en films in aparte Gists
 // Env vars:
 //   GITHUB_TOKEN          Personal Access Token (gist scope)
-//   GITHUB_GIST_ID        Gist ID voor series bibliotheek
-//   GITHUB_FILMS_GIST_ID  Gist ID voor films bibliotheek
+//   GH_GIST_ID        Gist ID voor series bibliotheek
+//   GH_FILMS_GIST_ID  Gist ID voor films bibliotheek
 
 const GIST_API    = "https://api.github.com/gists";
 const SERIES_FILE = "serieinfo-series.json";
@@ -15,8 +15,8 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   const token       = process.env.GITHUB_TOKEN;
-  const seriesGist  = process.env.GITHUB_GIST_ID;
-  const filmsGist   = process.env.GITHUB_FILMS_GIST_ID;
+  const seriesGist  = process.env.GH_GIST_ID;
+  const filmsGist   = process.env.GH_FILMS_GIST_ID;
 
   const ghHeaders = {
     "Accept":        "application/vnd.github+json",

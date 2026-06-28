@@ -1970,28 +1970,6 @@
       "watched_seasons": []
     },
     {
-      "title": "Nemesis",
-      "year": "2026",
-      "genres": [
-        "Action & Adventure",
-        "Drama",
-        "Crime"
-      ],
-      "description": "A relentless LAPD cop becomes obsessed with taking down the master thief behind a string of daring heists — and only one can come out on top.",
-      "tmdb_rating": "7.4/10",
-      "imdb_rating": null,
-      "imdb_url": "https://www.imdb.com/title/tt36022742/",
-      "poster_url": "https://image.tmdb.org/t/p/w342/NY7ZwSMw5PjoJdK2CObqiTj7Bm.jpg",
-      "streaming_service": "Netflix",
-      "streaming_url": "https://www.netflix.com",
-      "streaming_logo": "https://image.tmdb.org/t/p/w45/pbpMk2JmcoNnQwx5JGpXngfoWtp.jpg",
-      "season_count": 1,
-      "watched_seasons": [],
-      "watched": true,
-      "id": "s1782104895949",
-      "savedAt": "2026-06-22T05:08:15.949Z"
-    },
-    {
       "id": "imp17792918283601",
       "title": "The Friend and Neighbors",
       "streaming_service": "Apple TV+",
@@ -2279,26 +2257,8 @@
       "enriched": false,
       "watched": false,
       "watched_seasons": []
-    },
-    {
-      "id": "imp177929182836181",
-      "title": "Beef",
-      "streaming_service": "Netflix",
-      "streaming_url": "https://www.netflix.com",
-      "genres": [],
-      "year": null,
-      "description": null,
-      "imdb_rating": null,
-      "imdb_url": null,
-      "rt_rating": null,
-      "rt_url": null,
-      "savedAt": "2026-05-20T15:43:48.361Z",
-      "enriched": false,
-      "watched": false,
-      "watched_seasons": []
     }
   ],
-  "films": [],
   "exportedAt": "2026-06-26T12:04:31.000Z",
   "version": 1
 }
