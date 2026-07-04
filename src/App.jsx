@@ -120,9 +120,12 @@ async function enrichOne(title, streamingService) {
 
 
 // --- Cloud Sync via npoint.io (proxy: /api/sync) -------------------------
-const SYNC_ENABLED_KEY = "serieinfo-sync-on";
-const getSyncEnabled = () => localStorage.getItem(SYNC_ENABLED_KEY) === "true";
-const setSyncEnabled = (v) => localStorage.setItem(SYNC_ENABLED_KEY, v ? "true" : "false");
+const SYNC_ENABLED_KEY   = "serieinfo-sync-on";
+const CLOUD_TS_KEY       = "serieinfo-cloud-ts";
+const getSyncEnabled     = () => localStorage.getItem(SYNC_ENABLED_KEY) === "true";
+const setSyncEnabled     = (v) => localStorage.setItem(SYNC_ENABLED_KEY, v ? "true" : "false");
+const getLastCloudTs     = () => localStorage.getItem(CLOUD_TS_KEY) || "";
+const setLastCloudTs     = (ts) => localStorage.setItem(CLOUD_TS_KEY, ts || "");
 
 // Parse response safely  -  returns object or throws readable error
 async function parseSync(r) {
@@ -203,7 +206,7 @@ function unionById(localItems, cloudItems) {
   return [...localItems, ...cloudOnly];
 }
 
-function SyncBar({ library, films, onImport, onReplace }) {
+function SyncBar({ library, films, onImport }) {
   const [enabled,  setEnabled]  = useState(getSyncEnabled);
   const [status,   setStatus]   = useState("idle");
   const [msg,      setMsg]      = useState("");
@@ -261,6 +264,11 @@ function SyncBar({ library, films, onImport, onReplace }) {
         onImport(mergedLib, mergedFilms);
       }
 
+      // Store the new cloud timestamp so next pull knows this device was the last writer
+      try {
+        const refreshed = await cloudGet();
+        if (refreshed?.updatedAt) setLastCloudTs(refreshed.updatedAt);
+      } catch (_) {}
       setStatus("ok"); setLastSync(new Date());
       setMsg(mergedLib.length + " series, " + mergedFilms.length + " films (" + sizeKB + " KB)");
     } catch (e) {
@@ -270,12 +278,12 @@ function SyncBar({ library, films, onImport, onReplace }) {
 
   async function pullFromCloud(isInitialLoad = false) {
     setStatus("syncing");
-    setMsg(isInitialLoad ? "Bibliotheek ophalen uit cloud..." : "");
+    setMsg(isInitialLoad ? "Bibliotheek controleren..." : "");
     try {
       const d = await cloudGet();
       if (!d || typeof d !== "object") {
         setStatus("error"); setMsg("Ongeldig antwoord van cloud");
-        readyToPush.current = true; // allow push even if pull failed
+        readyToPush.current = true;
         return;
       }
       const cloudLib   = Array.isArray(d.library) ? d.library : null;
@@ -285,13 +293,29 @@ function SyncBar({ library, films, onImport, onReplace }) {
         readyToPush.current = true;
         return;
       }
-      onImport(cloudLib || [], cloudFilms || []);
-      setStatus("ok"); setLastSync(new Date());
-      setMsg((cloudLib?.length || 0) + " series, " + (cloudFilms?.length || 0) + " films geladen");
+
+      const cloudTs = d.updatedAt || "";
+      const localTs = getLastCloudTs();
+      const cloudIsNewer = cloudTs && cloudTs !== localTs;
+
+      if (cloudIsNewer) {
+        // Cloud was updated externally (agent or other device clean push)
+        // Force full replace  -  no merge, no pollution
+        if (Array.isArray(cloudLib))   { saveLib(cloudLib);     setLibrary([...cloudLib]);   }
+        if (Array.isArray(cloudFilms)) { saveFilms(cloudFilms); setFilms([...cloudFilms]);   }
+        setLastCloudTs(cloudTs);
+        setStatus("ok"); setLastSync(new Date());
+        setMsg("Vervangen: " + (cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films" + (isInitialLoad ? " (cloud bijgewerkt)" : ""));
+      } else {
+        // Cloud has same timestamp as last seen  -  normal merge for own changes
+        onImport(cloudLib || [], cloudFilms || []);
+        if (cloudTs) setLastCloudTs(cloudTs);
+        setStatus("ok"); setLastSync(new Date());
+        setMsg((cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films gesynchroniseerd");
+      }
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     } finally {
-      // Gate opens after pull: auto-sync may now push user actions
       readyToPush.current = true;
     }
   }
@@ -342,14 +366,6 @@ function SyncBar({ library, films, onImport, onReplace }) {
           alert(fms.length + " films geladen.");
         }} />
         {enabled && (
-          <ImportBtn label="Vervang alles + sync" onLoad={data => {
-            const lib = Array.isArray(data.library) ? data.library : [];
-            const fms = Array.isArray(data.films)   ? data.films   : [];
-            if (!window.confirm("Library en films volledig vervangen en direct naar cloud sturen?")) return;
-            onReplace(lib, fms);
-          }} />
-        )}
-        {enabled && (
           <>
             <button className="sync-btn primary" onClick={() => doMergePush()} disabled={status === "syncing"}>
               {status === "syncing" ? "Bezig..." : "Stuur naar cloud"}
@@ -362,8 +378,58 @@ function SyncBar({ library, films, onImport, onReplace }) {
         <button className={"sync-btn" + (!enabled ? " primary" : "")} onClick={handleToggle}>
           {enabled ? "Sync uitschakelen" : "Sync inschakelen + ophalen"}
         </button>
+        <AgentButton />
       </div>
     </div>
+  );
+}
+
+// --- Weekly Update Agent Button ------------------------------------------
+function AgentButton() {
+  const [running, setRunning] = useState(false);
+  const [log,     setLog]     = useState([]);
+  const [showLog, setShowLog] = useState(false);
+
+  async function runAgent() {
+    setRunning(true); setLog(["Agent gestart..."]); setShowLog(true);
+    try {
+      const r = await fetch("/api/weekly-update", { method: "POST" });
+      const d = await r.json();
+      if (d.ok) {
+        setLog(d.log || ["Klaar"]);
+      } else {
+        setLog(["Fout: " + (d.error || "onbekend")]);
+      }
+    } catch (e) {
+      setLog(["Verbindingsfout: " + e.message]);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <>
+      <button className="sync-btn" onClick={runAgent} disabled={running}
+        title="Update alle serie- en filmgegevens via TMDB, verwijder duplicaten, werk streamingdiensten bij">
+        {running ? "Agent bezig..." : "Agent uitvoeren"}
+      </button>
+      {showLog && (
+        <div style={{
+          position:"fixed", bottom:60, right:16, background:"#1c1917", color:"#e7e5e4",
+          borderRadius:12, padding:"14px 16px", maxWidth:340, zIndex:200,
+          fontSize:12, fontFamily:"monospace", lineHeight:1.7,
+          boxShadow:"0 4px 24px rgba(0,0,0,.4)",
+        }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <span style={{ fontWeight:700, fontSize:13 }}>Update log</span>
+            <button onClick={() => setShowLog(false)}
+              style={{ background:"none", border:"none", color:"#a8a29e", cursor:"pointer", fontSize:16 }}>x</button>
+          </div>
+          {log.map((line, i) => <div key={i}>{line}</div>)}
+          {running && <div style={{ color:"#f59e0b", marginTop:4 }}>Bezig... dit kan 1-2 minuten duren</div>}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1636,7 +1702,14 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
       }
       <div className="film-info">
         <div className="film-title">{film.title}</div>
-        <div className="film-year">{film.year || ""}</div>
+        <div className="film-year">
+          {film.year || ""}
+          {film.nl_release_date && (
+            <span style={{ marginLeft:6, color:"#7c3aed", fontWeight:600 }}>
+              NL {new Date(film.nl_release_date).toLocaleDateString("nl-NL", { day:"2-digit", month:"2-digit", year:"numeric" })}
+            </span>
+          )}
+        </div>
         <div className="film-genres">
           {(film.genres || []).slice(0, 2).map(g => (
             <span key={g} className="film-genre">{g}</span>
@@ -2577,16 +2650,6 @@ export default function App() {
   function addItem(item) { const u = [item, ...library]; setLibrary(u); saveLib(u); }
   function addFilm(film) { const u = [film, ...films]; setFilms(u); saveFilms(u); }
 
-  function replaceAll(newLibrary, newFilms) {
-    // Hard replace: no merge, wipe local + cloud with exactly this data
-    setLibrary(newLibrary); saveLib(newLibrary);
-    setFilms(newFilms);     saveFilms(newFilms);
-    // Push straight to cloud (bypass merge-push timer)
-    cloudPut({ library: newLibrary, films: newFilms })
-      .then(() => alert(newLibrary.length + " series, " + newFilms.length + " films opgeslagen in cloud."))
-      .catch(e => alert("Cloud fout: " + e.message));
-  }
-
   function importFromCloud(newLibrary, newFilms) {
     // null means "don't touch this collection" (e.g. series-only import)
     // TRUE union merge: cloud wins on conflicts, local-only items kept.
@@ -2721,7 +2784,7 @@ export default function App() {
         {page === "library" && <LibraryPage library={library} enrichingIds={enrichingIds} onDelete={deleteItem} onToggleWatched={toggleWatched} onToggleSeason={toggleSeasonWatched} onMarkAllSeasons={markAllSeasonsWatched} onUpdate={updateItem} onGo={setPage} onDeduplicate={deduplicateLibrary} />}
         {page === "import" && <ImportPage currentLibrary={library} onLibraryUpdate={updateLibrary} onResetLibrary={resetLibrary} />}
       </div>
-      <SyncBar library={library} films={films} onImport={importFromCloud} onReplace={replaceAll} />
+      <SyncBar library={library} films={films} onImport={importFromCloud} />
     </>
   );
 }

@@ -297,11 +297,12 @@ async function main() {
   const updatedFilms = await processBatch(filmsWithId, updateFilm, "Films");
   films = [...updatedFilms, ...filmsWithoutId];
 
-  // 5. Write back
-  log("Schrijven naar Gist...");
+  // 5. Write back — include updatedAt so all devices know to force-replace on next open
+  const updatedAt = new Date().toISOString();
+  log("Schrijven naar Gist... (updatedAt: " + updatedAt + ")");
   await Promise.all([
-    writeGist(SERIES_ID, SERIES_FILE, { library }),
-    writeGist(FILMS_ID,  FILMS_FILE,  { films }),
+    writeGist(SERIES_ID, SERIES_FILE, { library, updatedAt }),
+    writeGist(FILMS_ID,  FILMS_FILE,  { films,   updatedAt }),
   ]);
 
   const elapsed = Math.round((Date.now() - started) / 1000);
