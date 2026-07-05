@@ -221,14 +221,16 @@ function SyncBar({ library, films, onImport }) {
   useEffect(() => { libRef.current   = library; }, [library]);
   useEffect(() => { filmsRef.current = films;   }, [films]);
 
-  // On mount: if sync enabled, pull from cloud first so refresh never uses stale localStorage
+  // On mount: always pull from cloud so page load always shows latest data.
+  // Auto-push (doMergePush) is still gated behind `enabled` and `readyToPush`.
   useEffect(() => {
-    if (enabled) pullFromCloud(true);
+    pullFromCloud(true);
   }, []); // only on mount
 
-  // Auto-sync: only fires after user actions, not on initial page load
+  // Auto-sync: only fires when sync is enabled AND after the initial pull
   useEffect(() => {
-    if (!enabled || !readyToPush.current) return;
+    if (!enabled) return;          // push only when sync is on
+    if (!readyToPush.current) return;
     if (library.length === 0 && films.length === 0) return;
     clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(() => doMergePush(), 2000);
