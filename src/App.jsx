@@ -264,11 +264,6 @@ function SyncBar({ library, films, onImport }) {
         onImport(mergedLib, mergedFilms);
       }
 
-      // Store the new cloud timestamp so next pull knows this device was the last writer
-      try {
-        const refreshed = await cloudGet();
-        if (refreshed?.updatedAt) setLastCloudTs(refreshed.updatedAt);
-      } catch (_) {}
       setStatus("ok"); setLastSync(new Date());
       setMsg(mergedLib.length + " series, " + mergedFilms.length + " films (" + sizeKB + " KB)");
     } catch (e) {
@@ -278,44 +273,37 @@ function SyncBar({ library, films, onImport }) {
 
   async function pullFromCloud(isInitialLoad = false) {
     setStatus("syncing");
-    setMsg(isInitialLoad ? "Bibliotheek controleren..." : "");
+    setMsg(isInitialLoad ? "Bibliotheek ophalen uit cloud..." : "");
     try {
       const d = await cloudGet();
       if (!d || typeof d !== "object") {
         setStatus("error"); setMsg("Ongeldig antwoord van cloud");
-        readyToPush.current = true;
         return;
       }
       const cloudLib   = Array.isArray(d.library) ? d.library : null;
       const cloudFilms = Array.isArray(d.films)   ? d.films   : null;
       if (!cloudLib && !cloudFilms) {
         setStatus("error"); setMsg("Geen data gevonden in cloud");
-        readyToPush.current = true;
         return;
       }
 
-      const cloudTs = d.updatedAt || "";
-      const localTs = getLastCloudTs();
-      const cloudIsNewer = cloudTs && cloudTs !== localTs;
-
-      if (cloudIsNewer) {
-        // Cloud was updated externally (agent or other device clean push)
-        // Force full replace  -  no merge, no pollution
+      if (isInitialLoad) {
+        // Page load: cloud is altijd leidend  -  volledig vervangen, nooit samenvoegen.
+        // Voorkomt dat stale lokale data de cloud vervuilt na een agent-update.
         if (Array.isArray(cloudLib))   { saveLib(cloudLib);     setLibrary([...cloudLib]);   }
         if (Array.isArray(cloudFilms)) { saveFilms(cloudFilms); setFilms([...cloudFilms]);   }
-        setLastCloudTs(cloudTs);
         setStatus("ok"); setLastSync(new Date());
-        setMsg("Vervangen: " + (cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films" + (isInitialLoad ? " (cloud bijgewerkt)" : ""));
+        setMsg((cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films geladen");
       } else {
-        // Cloud has same timestamp as last seen  -  normal merge for own changes
+        // Handmatige pull: unie-samenvoegen zodat lokale toevoegingen behouden blijven
         onImport(cloudLib || [], cloudFilms || []);
-        if (cloudTs) setLastCloudTs(cloudTs);
         setStatus("ok"); setLastSync(new Date());
         setMsg((cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films gesynchroniseerd");
       }
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     } finally {
+      // Pas na pull mag auto-sync pushen
       readyToPush.current = true;
     }
   }
