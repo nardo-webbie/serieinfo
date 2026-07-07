@@ -1,12 +1,10 @@
 {
   "functions": {
     "api/sync.js": {
-      "maxDuration": 15,
-      "regions": ["fra1", "ams1", "cdg1"]
+      "maxDuration": 15
     },
     "api/weekly-update.js": {
-      "maxDuration": 60,
-      "regions": ["fra1"]
+      "maxDuration": 60
     },
     "api/claude.js": {
       "maxDuration": 30
