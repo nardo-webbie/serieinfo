@@ -215,7 +215,8 @@ function SyncBar({ library, films, onImport }) {
   // Refs always hold the latest values
   const libRef       = useRef(library);
   const filmsRef     = useRef(films);
-  const readyToPush  = useRef(false); // true only after initial pull  -  prevents overwrite on refresh
+  const readyToPush  = useRef(false); // true only after initial pull
+  const isPulling    = useRef(false);  // blocks auto-push during pull
   const pushTimer    = useRef(null);
 
   useEffect(() => { libRef.current   = library; }, [library]);
@@ -227,13 +228,14 @@ function SyncBar({ library, films, onImport }) {
     pullFromCloud(true);
   }, []); // only on mount
 
-  // Auto-sync: only fires when sync is enabled AND after the initial pull
+  // Auto-sync: only fires when sync is enabled, after initial pull, and not during a pull
   useEffect(() => {
-    if (!enabled) return;          // push only when sync is on
+    if (!enabled) return;
     if (!readyToPush.current) return;
+    if (isPulling.current) return;   // never push while a pull is in progress
     if (library.length === 0 && films.length === 0) return;
     clearTimeout(pushTimer.current);
-    pushTimer.current = setTimeout(() => doMergePush(), 2000);
+    pushTimer.current = setTimeout(() => doMergePush(), 3000);
     return () => clearTimeout(pushTimer.current);
   }, [library, films, enabled]);
 
@@ -274,6 +276,7 @@ function SyncBar({ library, films, onImport }) {
   }
 
   async function pullFromCloud(isInitialLoad = false) {
+    isPulling.current = true;
     setStatus("syncing");
     setMsg(isInitialLoad ? "Bibliotheek ophalen uit cloud..." : "");
     try {
@@ -305,8 +308,9 @@ function SyncBar({ library, films, onImport }) {
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     } finally {
-      // Pas na pull mag auto-sync pushen
       readyToPush.current = true;
+      // Small delay before allowing auto-push  -  gives React time to settle state
+      setTimeout(() => { isPulling.current = false; }, 3000);
     }
   }
 
@@ -2434,14 +2438,22 @@ function ImportPage({ currentLibrary, onLibraryUpdate, onResetLibrary }) {
     running.current = true;
     setPhase("step1"); setErrors([]); setSavedCount(0); setEnriched(0); setCurrent("");
 
-    const existingTitles = new Set(currentLibrary.map(e => (e.title || "").toLowerCase()));
-    const basic = sourceList.filter(s => !existingTitles.has(s.title.toLowerCase()))
-      .map((s, i) => ({
-        id: "imp" + Date.now() + i, title: s.title,
-        streaming_service: s.streaming_service, streaming_url: s.streaming_url,
-        genres: [], year: null, description: null, imdb_rating: null, imdb_url: null,
-        rt_rating: null, rt_url: null, savedAt: new Date().toISOString(), enriched: false,
-      }));
+    // Build a map of existing titles -> existing items (to reuse their IDs)
+    const existingByTitle = {};
+    currentLibrary.forEach(e => { existingByTitle[(e.title || "").toLowerCase()] = e; });
+
+    const basic = sourceList
+      .filter(s => !existingByTitle[s.title.toLowerCase()]) // skip already present
+      .map((s, i) => {
+        // Stable ID based on title so same series always gets the same ID across devices
+        const stableId = "imp_" + s.title.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 40);
+        return {
+          id: stableId, title: s.title,
+          streaming_service: s.streaming_service, streaming_url: s.streaming_url,
+          genres: [], year: null, description: null, imdb_rating: null, imdb_url: null,
+          rt_rating: null, rt_url: null, savedAt: new Date().toISOString(), enriched: false,
+        };
+      });
 
     const merged = [...basic, ...currentLibrary];
     setSavedCount(basic.length);
