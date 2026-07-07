@@ -3,9 +3,6 @@
     "api/sync.js": {
       "maxDuration": 10
     },
-    "api/weekly-update.js": {
-      "maxDuration": 10
-    },
     "api/claude.js": {
       "maxDuration": 10
     },
