@@ -121,11 +121,16 @@ async function enrichOne(title, streamingService) {
 
 // --- Cloud Sync via npoint.io (proxy: /api/sync) -------------------------
 const SYNC_ENABLED_KEY   = "serieinfo-sync-on";
-const CLOUD_TS_KEY       = "serieinfo-cloud-ts";
+const DATA_VERSION_KEY   = "serieinfo-data-version";
 const getSyncEnabled     = () => localStorage.getItem(SYNC_ENABLED_KEY) === "true";
 const setSyncEnabled     = (v) => localStorage.setItem(SYNC_ENABLED_KEY, v ? "true" : "false");
-const getLastCloudTs     = () => localStorage.getItem(CLOUD_TS_KEY) || "";
-const setLastCloudTs     = (ts) => localStorage.setItem(CLOUD_TS_KEY, ts || "");
+const getLocalVersion    = () => parseInt(localStorage.getItem(DATA_VERSION_KEY) || "0", 10);
+const setLocalVersion    = (v) => localStorage.setItem(DATA_VERSION_KEY, String(v || 0));
+function clearLocalData() {
+  localStorage.removeItem(LIB_KEY);
+  localStorage.removeItem(FILM_KEY);
+  localStorage.removeItem(DATA_VERSION_KEY);
+}
 
 // Parse response safely  -  returns object or throws readable error
 async function parseSync(r) {
@@ -261,7 +266,7 @@ function SyncBar({ library, films, onImport }) {
 
       // 3. Push merged result to cloud
       const sizeKB = Math.round(JSON.stringify({ library: mergedLib, films: mergedFilms }).length / 1024);
-      await cloudPut({ library: mergedLib, films: mergedFilms });
+      await cloudPut({ library: mergedLib, films: mergedFilms, version: getLocalVersion() });
 
       // 4. Update local state if cloud had extra items not present locally
       if (mergedLib.length > localLib.length || mergedFilms.length > localFilms.length) {
@@ -2628,8 +2633,35 @@ export default function App() {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
 
-    setLibrary(loadLib());
-    setFilms(loadFilms());
+    // Version-gated load: if cloud has a higher version (agent cleaned up),
+    // wipe local data and load fresh from cloud. Otherwise use localStorage.
+    async function initData() {
+      try {
+        const d = await cloudGet();
+        const cloudVersion = parseInt(d?.version || "0", 10);
+        const localVersion = getLocalVersion();
+
+        if (cloudVersion > localVersion) {
+          // Agent has cleaned data since our last load -> wipe stale local data
+          clearLocalData();
+          const lib   = Array.isArray(d.library) ? d.library : [];
+          const fms   = Array.isArray(d.films)   ? d.films   : [];
+          saveLib(lib); saveFilms(fms);
+          setLibrary(lib);
+          setFilms(fms);
+          setLocalVersion(cloudVersion);
+        } else {
+          // Same version -> fast load from localStorage
+          setLibrary(loadLib());
+          setFilms(loadFilms());
+        }
+      } catch {
+        // Cloud unreachable -> fall back to localStorage
+        setLibrary(loadLib());
+        setFilms(loadFilms());
+      }
+    }
+    initData();
 
     // Handle incoming share from phone (Web Share Target API)
     const params = new URLSearchParams(window.location.search);

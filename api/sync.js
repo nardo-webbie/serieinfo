@@ -99,23 +99,25 @@ export default async function handler(req, res) {
                     : Array.isArray(seriesData)          ? seriesData : [];
       const films   = Array.isArray(filmsData?.films)    ? filmsData.films
                     : Array.isArray(filmsData)            ? filmsData : [];
-      return res.status(200).json({ library, films });
+      const version   = parseInt(seriesData?.version || filmsData?.version || "0", 10);
+      return res.status(200).json({ library, films, version });
     }
 
     // PUT — sla series en films op in hun eigen Gist (parallel)
     if (req.method === "PUT") {
-      const body   = await readBody();
-      const errors = [];
+      const body      = await readBody();
+      const version = parseInt(body.version || "0", 10); // preserve existing version, only agent bumps it
+      const errors  = [];
       await Promise.all([
         Array.isArray(body.library) && seriesGist
-          ? patchGist(seriesGist, SERIES_FILE, { library: body.library }).catch(e => errors.push("series: " + e.message))
+          ? patchGist(seriesGist, SERIES_FILE, { library: body.library, version }).catch(e => errors.push("series: " + e.message))
           : Promise.resolve(),
         Array.isArray(body.films) && filmsGist
-          ? patchGist(filmsGist, FILMS_FILE, { films: body.films }).catch(e => errors.push("films: " + e.message))
+          ? patchGist(filmsGist, FILMS_FILE,  { films: body.films, version }).catch(e => errors.push("films: " + e.message))
           : Promise.resolve(),
       ]);
       if (errors.length) return res.status(500).json({ error: errors.join(" | ") });
-      return res.status(200).json({ ok: true });
+      return res.status(200).json({ ok: true, version });
     }
 
     // POST — maak een nieuwe Gist aan (eenmalige setup)

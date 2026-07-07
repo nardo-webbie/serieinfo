@@ -273,7 +273,9 @@ async function main() {
   ]);
   let library = Array.isArray(seriesData?.library) ? seriesData.library : [];
   let films   = Array.isArray(filmsData?.films)    ? filmsData.films    : [];
-  log("Geladen: " + library.length + " series, " + films.length + " films");
+  // Increment version so all clients know to force-clear stale local data
+  const newVersion = (parseInt(seriesData?.version || "0", 10) || 0) + 1;
+  log("Geladen: " + library.length + " series, " + films.length + " films (versie " + newVersion + ")");
 
   // 2. Deduplicate
   const { items: dedLib,   removed: remLib   } = deduplicate(library);
@@ -299,10 +301,10 @@ async function main() {
 
   // 5. Write back — include updatedAt so all devices know to force-replace on next open
   const updatedAt = new Date().toISOString();
-  log("Schrijven naar Gist... (updatedAt: " + updatedAt + ")");
+  log("Schrijven naar Gist... (versie " + newVersion + ")");
   await Promise.all([
-    writeGist(SERIES_ID, SERIES_FILE, { library, updatedAt }),
-    writeGist(FILMS_ID,  FILMS_FILE,  { films,   updatedAt }),
+    writeGist(SERIES_ID, SERIES_FILE, { library, version: newVersion }),
+    writeGist(FILMS_ID,  FILMS_FILE,  { films,   version: newVersion }),
   ]);
 
   const elapsed = Math.round((Date.now() - started) / 1000);
