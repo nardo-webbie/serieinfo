@@ -1,13 +1,13 @@
 {
   "functions": {
     "api/sync.js": {
-      "maxDuration": 15
+      "maxDuration": 10
     },
     "api/weekly-update.js": {
-      "maxDuration": 60
+      "maxDuration": 10
     },
     "api/claude.js": {
-      "maxDuration": 30
+      "maxDuration": 10
     },
     "api/test.js": {
       "maxDuration": 5
