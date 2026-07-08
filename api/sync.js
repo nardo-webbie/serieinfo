@@ -14,7 +14,8 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const token       = process.env.GITHUB_TOKEN;
+  // Support both GH_PAT and GITHUB_TOKEN as env var names
+  const token       = process.env.GH_PAT || process.env.GITHUB_TOKEN;
   const seriesGist  = process.env.GH_GIST_ID;
   const filmsGist   = process.env.GH_FILMS_GIST_ID;
 
