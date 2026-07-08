@@ -297,19 +297,11 @@ function SyncBar({ library, films, onImport }) {
         return;
       }
 
-      if (isInitialLoad) {
-        // Page load: cloud is altijd leidend  -  volledig vervangen, nooit samenvoegen.
-        // Voorkomt dat stale lokale data de cloud vervuilt na een agent-update.
-        if (Array.isArray(cloudLib))   { saveLib(cloudLib);     setLibrary([...cloudLib]);   }
-        if (Array.isArray(cloudFilms)) { saveFilms(cloudFilms); setFilms([...cloudFilms]);   }
-        setStatus("ok"); setLastSync(new Date());
-        setMsg((cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films geladen");
-      } else {
-        // Handmatige pull: unie-samenvoegen zodat lokale toevoegingen behouden blijven
-        onImport(cloudLib || [], cloudFilms || []);
-        setStatus("ok"); setLastSync(new Date());
-        setMsg((cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films gesynchroniseerd");
-      }
+      // Beide gevallen via onImport -- versie-check in App.initData doet de force-replace.
+      // SyncBar heeft geen toegang tot setLibrary/setFilms (die zijn App-state).
+      onImport(cloudLib || [], cloudFilms || []);
+      setStatus("ok"); setLastSync(new Date());
+      setMsg((cloudLib?.length||0) + " series, " + (cloudFilms?.length||0) + " films geladen");
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 80));
     } finally {
