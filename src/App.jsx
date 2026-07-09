@@ -201,16 +201,6 @@ function ImportBtn({ label, onLoad }) {
   );
 }
 
-// Helper: union-merge two arrays by ID
-function unionById(localItems, cloudItems) {
-  const cloudById = {};
-  cloudItems.forEach(i => { cloudById[i.id] = i; });
-  const localIds = new Set(localItems.map(i => i.id));
-  const cloudOnly = cloudItems.filter(i => !localIds.has(i.id));
-  // Local wins for items in both (latest user action), cloud fills in missing items
-  return [...localItems, ...cloudOnly];
-}
-
 function SyncBar({ library, films, onImport }) {
   const [enabled,  setEnabled]  = useState(getSyncEnabled);
   const [status,   setStatus]   = useState("idle");
@@ -244,37 +234,18 @@ function SyncBar({ library, films, onImport }) {
     return () => clearTimeout(pushTimer.current);
   }, [library, films, enabled]);
 
-  // Merge-push: pull cloud first, union-merge, then push back.
-  // This guarantees the cloud always ends up with the SUPERSET of all devices.
+  // Simple push: local state is authoritative, push directly to cloud.
+  // No pull-before-push  -  this ensures deletes actually stick.
   async function doMergePush() {
-    const localLib   = libRef.current;
-    const localFilms = filmsRef.current;
-    if (localLib.length === 0 && localFilms.length === 0) return;
+    const lib = libRef.current;
+    const fms = filmsRef.current;
+    if (lib.length === 0 && fms.length === 0) return;
     setStatus("syncing"); setMsg("");
     try {
-      // 1. Fetch current cloud state
-      let cloudLib = [], cloudFilms = [];
-      try {
-        const d = await cloudGet();
-        cloudLib   = Array.isArray(d?.library) ? d.library : [];
-        cloudFilms = Array.isArray(d?.films)   ? d.films   : [];
-      } catch (_) { /* cloud unreachable: push local only */ }
-
-      // 2. Union-merge: result always contains items from BOTH sides
-      const mergedLib   = unionById(localLib,   cloudLib);
-      const mergedFilms = unionById(localFilms, cloudFilms);
-
-      // 3. Push merged result to cloud
-      const sizeKB = Math.round(JSON.stringify({ library: mergedLib, films: mergedFilms }).length / 1024);
-      await cloudPut({ library: mergedLib, films: mergedFilms, version: getLocalVersion() });
-
-      // 4. Update local state if cloud had extra items not present locally
-      if (mergedLib.length > localLib.length || mergedFilms.length > localFilms.length) {
-        onImport(mergedLib, mergedFilms);
-      }
-
+      const sizeKB = Math.round(JSON.stringify({ library: lib, films: fms }).length / 1024);
+      await cloudPut({ library: lib, films: fms, version: getLocalVersion() });
       setStatus("ok"); setLastSync(new Date());
-      setMsg(mergedLib.length + " series, " + mergedFilms.length + " films (" + sizeKB + " KB)");
+      setMsg(lib.length + " series, " + fms.length + " films (" + sizeKB + " KB)");
     } catch (e) {
       setStatus("error"); setMsg(e.message.slice(0, 120));
     }
@@ -2625,33 +2596,38 @@ export default function App() {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
 
-    // Version-gated load: if cloud has a higher version (agent cleaned up),
-    // wipe local data and load fresh from cloud. Otherwise use localStorage.
+    // Version-gated load: if cloud has a higher version (agent cleaned up)
+    // AND cloud actually has data, wipe local data and reload from cloud.
+    // Never wipe if cloud is empty or unreachable.
     async function initData() {
+      let localLib   = loadLib();
+      let localFilms = loadFilms();
+
       try {
         const d = await cloudGet();
-        const cloudVersion = parseInt(d?.version || "0", 10);
-        const localVersion = getLocalVersion();
+        const cloudVersion  = parseInt(d?.version || "0", 10);
+        const localVersion  = getLocalVersion();
+        const cloudLib      = Array.isArray(d?.library) ? d.library : [];
+        const cloudFilms    = Array.isArray(d?.films)   ? d.films   : [];
+        const cloudHasData  = cloudLib.length > 0 || cloudFilms.length > 0;
 
-        if (cloudVersion > localVersion) {
-          // Agent has cleaned data since our last load -> wipe stale local data
+        if (cloudHasData && cloudVersion > localVersion) {
+          // Agent cleaned data and cloud has content -> safe to replace local
           clearLocalData();
-          const lib   = Array.isArray(d.library) ? d.library : [];
-          const fms   = Array.isArray(d.films)   ? d.films   : [];
-          saveLib(lib); saveFilms(fms);
-          setLibrary(lib);
-          setFilms(fms);
+          saveLib(cloudLib); saveFilms(cloudFilms);
+          setLibrary(cloudLib);
+          setFilms(cloudFilms);
           setLocalVersion(cloudVersion);
-        } else {
-          // Same version -> fast load from localStorage
-          setLibrary(loadLib());
-          setFilms(loadFilms());
+          return; // skip local load below
         }
+        // Same version or cloud empty -> load from localStorage
       } catch {
-        // Cloud unreachable -> fall back to localStorage
-        setLibrary(loadLib());
-        setFilms(loadFilms());
+        // Cloud unreachable -> fall back silently to localStorage
       }
+
+      // Default: use localStorage data
+      setLibrary(localLib);
+      setFilms(localFilms);
     }
     initData();
 
