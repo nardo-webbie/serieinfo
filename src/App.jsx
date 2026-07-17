@@ -1534,6 +1534,15 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
                       });
                     }}
                   />
+                  {item.poster_url && (
+                    <img
+                      src={item.poster_url.replace("/w342", "/w92")}
+                      alt=""
+                      className="lrow-poster"
+                      loading="lazy"
+                      onClick={e => e.stopPropagation()}
+                    />
+                  )}
                   <div className="lrow-main">
                     <div className="lrow-top">
                       <div className="lrow-title">{item.title}</div>
@@ -1597,6 +1606,79 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
 }
 
 
+// --- Film Detail Modal --------------------------------------------------
+function FilmDetailModal({ film, onClose }) {
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  const el = (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth:520 }}>
+        <button className="modal-close" onClick={onClose}>x</button>
+        <div style={{ display:"flex", gap:16, alignItems:"flex-start" }}>
+          {film.poster_url && (
+            <img src={film.poster_url.replace("/w342","/w185")} alt={film.title}
+              style={{ width:110, borderRadius:8, flexShrink:0, objectFit:"cover" }} />
+          )}
+          <div style={{ flex:1, minWidth:0 }}>
+            <div className="modal-title" style={{ fontSize:"clamp(18px,3vw,24px)", marginBottom:6 }}>
+              {film.title}
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+              {film.year && <span className="ytag">{film.year}</span>}
+              {film.nl_release_date && (
+                <span className="ytag" style={{ background:"#f5f3ff", color:"#7c3aed" }}>
+                  NL {new Date(film.nl_release_date).toLocaleDateString("nl-NL",{day:"2-digit",month:"short",year:"numeric"})}
+                </span>
+              )}
+              {(film.genres||[]).map(g => <span key={g} className="tag">{g}</span>)}
+            </div>
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+              {film.tmdb_rating && (
+                <div className="rbox" style={{ padding:"5px 10px" }}>
+                  <div className="rl">TMDB</div><div className="rv tmdb">{film.tmdb_rating}</div>
+                </div>
+              )}
+              {film.imdb_rating && (
+                <div className="rbox" style={{ padding:"5px 10px" }}>
+                  <div className="rl">IMDb</div><div className="rv imdb">{film.imdb_rating}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        {film.description && (
+          <p style={{ fontSize:14, color:"#57534e", lineHeight:1.8, marginTop:16 }}>
+            {film.description}
+          </p>
+        )}
+        {film.streaming_service && (
+          <div style={{ marginTop:12, display:"flex", alignItems:"center", gap:8 }}>
+            {film.streaming_logo
+              ? <img src={film.streaming_logo} alt={film.streaming_service} style={{ width:20, height:20, borderRadius:5 }} />
+              : null}
+            <span style={{ fontSize:13, color:"#78716c" }}>{film.streaming_service}</span>
+            {film.streaming_url && (
+              <a href={film.streaming_url} target="_blank" rel="noopener noreferrer" className="lb primary" style={{ padding:"5px 12px", fontSize:12 }}>
+                Bekijk
+              </a>
+            )}
+          </div>
+        )}
+        <div className="modal-footer" style={{ marginTop:16 }}>
+          {film.imdb_url && (
+            <a href={film.imdb_url} target="_blank" rel="noopener noreferrer" className="lb sec">IMDb</a>
+          )}
+          <button className="btn-secondary" onClick={onClose}>Sluiten</button>
+        </div>
+      </div>
+    </div>
+  );
+  return createPortal(el, document.body);
+}
+
 // --- Film Card ----------------------------------------------------------
 // Cinema links in Dordrecht (correct locations)
 const CINEMA_DORDRECHT = [
@@ -1618,6 +1700,7 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
   const [availLoading, setAvailLoading] = useState(false);
   const [availErr,     setAvailErr]     = useState("");
   const [showAvail,    setShowAvail]    = useState(false);
+  const [showDetail,   setShowDetail]   = useState(false);
 
   function handleDelete()  { guard(() => onDelete(film.id)); }
   function handleWatched() { guard(() => onToggleWatched(film.id)); }
@@ -1662,7 +1745,7 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
         ? <img src={film.poster_url} alt={film.title} className="film-poster" loading="lazy" />
         : <div className="film-poster-placeholder">[film]</div>
       }
-      <div className="film-info">
+      <div className="film-info" style={{ cursor:"pointer" }} onClick={() => setShowDetail(true)}>
         <div className="film-title">{film.title}</div>
         <div className="film-year">
           {film.year || ""}
@@ -1747,6 +1830,7 @@ function FilmCard({ film, onDelete, onToggleWatched }) {
         </div>
       )}
 
+      {showDetail && <FilmDetailModal film={film} onClose={() => setShowDetail(false)} />}
       <PinGate />
     </div>
   );

@@ -966,3 +966,14 @@ body {
   width: 16px; height: 16px; border-radius: 4px;
   object-fit: cover; flex-shrink: 0; vertical-align: middle;
 }
+
+/* Series poster thumbnail in library row */
+.lrow-poster {
+  width: 42px;
+  min-width: 42px;
+  height: 60px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #f3f2f0;
+}
