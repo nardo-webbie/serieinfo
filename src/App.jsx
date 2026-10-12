@@ -77,6 +77,7 @@ async function tmdbSearch(title) {
 
   const voteAvg = det.vote_average || show.vote_average || null;
   return {
+    tmdb_id:           id,
     title:             det.name || show.name,
     year:              yearStr,
     genres:            (det.genres || []).map(g => g.name),
@@ -596,6 +597,7 @@ async function tmdbFetchFull(tmdbId) {
   const yearStr = year && endYear && endYear !== year ? year + "-" + endYear : year;
   const vote    = det.vote_average || null;
   return {
+    tmdb_id:           tmdbId,
     title:             det.name,
     year:              yearStr,
     genres:            (det.genres || []).map(g => g.name),
@@ -1019,6 +1021,7 @@ async function fetchFromTmdbId(tmdbId) {
 
   const voteAvg = det.vote_average || null;
   return {
+    tmdb_id:           tmdbId,
     title:             det.name || null,
     year:              yearStr,
     genres:            (det.genres || []).map(g => g.name),
@@ -2005,6 +2008,7 @@ function SearchPage({ library, films, onSave, onSaveFilm, sharedPayload, onClear
       const prov = await fetchNLProvider(type === "movie" ? "movie" : "tv", id);
       setResult(prev => ({
         ...(prev || {}),
+        tmdb_id:           data.tmdb_id           || prev?.tmdb_id || null,
         title:             data.title             || prev?.title  || series,
         year:              data.year              || prev?.year   || null,
         genres:            data.genres?.length    ? data.genres   : (prev?.genres || []),
