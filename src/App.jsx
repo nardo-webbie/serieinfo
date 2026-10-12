@@ -1450,13 +1450,16 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
 
   useEffect(() => { if (sel) setSel(library.find(i => i.id === sel.id) || null); }, [library]);
 
-  const watchedCount = library.filter(isFullyWatched).length;
+  const watchedCount  = library.filter(isFullyWatched).length;
+  const noTmdbCount   = library.filter(i => !i.tmdb_id).length;
+  const [noTmdb, setNoTmdb] = useState(false);
   const svcs = [...new Set(library.map(i => i.streaming_service).filter(Boolean))].sort();
   let list = library.filter(item => {
     const lq = q.toLowerCase();
     return (!lq || item.title?.toLowerCase().includes(lq) || (item.genres || []).some(g => g.toLowerCase().includes(lq)) || item.description?.toLowerCase().includes(lq))
       && (!svc || item.streaming_service === svc)
-      && (!hideWatched || !isFullyWatched(item));
+      && (!hideWatched || !isFullyWatched(item))
+      && (!noTmdb || !item.tmdb_id);
   });
   if (sort === "az") list = [...list].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
   if (sort === "imdb") list = [...list].sort((a, b) => (parseFloat(b.tmdb_rating) || 0) - (parseFloat(a.tmdb_rating) || 0));
@@ -1484,6 +1487,14 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
             title="Bekeken series verbergen"
           >
             {hideWatched ? "v Bekeken verborgen" : "[oog] Verberg bekeken"}
+          </button>
+          <button
+            className={"fb " + (noTmdb ? "on" : "")}
+            onClick={() => setNoTmdb(v => !v)}
+            title="Series zonder TMDB ID - worden door de weekly agent overgeslagen"
+            style={noTmdbCount > 0 && !noTmdb ? { borderColor: "#f59e0b", color: "#b45309" } : {}}
+          >
+            Geen TMDB {noTmdbCount > 0 && <span style={{ background: noTmdb ? "#fff3" : "#fef3c7", color: "#b45309", borderRadius: 10, padding: "1px 6px", fontSize: 11, marginLeft: 4 }}>{noTmdbCount}</span>}
           </button>
           <button className="fb" onClick={() => setShowDupes(true)} title="Zoek series met dezelfde titel">
             Check duplicaten
@@ -1545,7 +1556,10 @@ function LibraryPage({ library, enrichingIds, onDelete, onToggleWatched, onToggl
                   )}
                   <div className="lrow-main">
                     <div className="lrow-top">
-                      <div className="lrow-title">{item.title}</div>
+                      <div className="lrow-title">
+                        {item.title}
+                        {!item.tmdb_id && <span title="Geen TMDB ID - agent slaat deze serie over" style={{ marginLeft: 6, fontSize: 11, color: "#b45309", background: "#fef3c7", borderRadius: 8, padding: "1px 6px", verticalAlign: "middle" }}>geen TMDB</span>}
+                      </div>
                       <div className="lrow-meta">
                         {item.year && <span className="lrow-year">{item.year}</span>}
                         {(item.genres || []).slice(0, 2).map(g => <span key={g} className="lrow-genre">{g}</span>)}
